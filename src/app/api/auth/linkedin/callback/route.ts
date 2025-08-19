@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { exchangeLinkedInCode, fetchLinkedInProfile } from '@/lib/oauth/linkedin';
+import { cookies } from 'next/headers';
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
@@ -12,6 +13,13 @@ export async function GET(req: NextRequest) {
   }
   if (!code || !state) {
     return NextResponse.json({ error: 'Missing code or state' }, { status: 400 });
+  }
+
+  // Basic CSRF: compare state cookie
+  const cookieStore = cookies();
+  const expected = cookieStore.get?.('lp_li_state')?.value;
+  if (!expected || expected !== state) {
+    return NextResponse.json({ error: 'Invalid state' }, { status: 400 });
   }
 
   try {

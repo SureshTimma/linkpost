@@ -4,7 +4,7 @@ import React, { createContext, useContext, useEffect, useRef, useState } from 'r
 import { User, CreateUserData } from '@/types/user';
 import { getUserByPhoneNumber, createUserWithId, updateUserLogin, updateUserActivity } from '@/lib/firebase/users';
 import { auth } from '@/lib/firebase/config';
-import { RecaptchaVerifier, signInWithPhoneNumber, ConfirmationResult, onAuthStateChanged, signOut as firebaseSignOut } from 'firebase/auth';
+import { RecaptchaVerifier, signInWithPhoneNumber, ConfirmationResult, onAuthStateChanged, signOut as firebaseSignOut, setPersistence, browserLocalPersistence } from 'firebase/auth';
 import toast from 'react-hot-toast';
 
 interface AuthState {
@@ -52,43 +52,76 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const confirmationResultRef = useRef<ConfirmationResult | null>(null);
   const recaptchaRef = useRef<RecaptchaVerifier | null>(null);
 
-  // Initialize auth state with a loading phase to prevent premature redirects
   useEffect(() => {
+    let unsub: (() => void) | null = null;
+    let graceTimer: NodeJS.Timeout | null = null;
     setIsLoading(true);
-    const unsub = onAuthStateChanged(auth, async (firebaseUser) => {
-      if (!firebaseUser) {
-        setUser(null);
-        setIsSignedIn(false);
-        localStorage.removeItem('user_data');
-        setIsLoading(false);
-        return;
-      }
-      if (!firebaseUser.phoneNumber) {
-        setIsLoading(false);
-        return;
-      }
+    setPersistence(auth, browserLocalPersistence).catch(err => {
+      console.warn('Auth persistence setup failed:', err);
+    }).finally(() => {
+      // optimistic from cache
       try {
-        let existingUser = await getUserByPhoneNumber(firebaseUser.phoneNumber);
-        if (!existingUser) {
-          const createUserData: CreateUserData = { phoneNumber: firebaseUser.phoneNumber, firstName: '', lastName: '', email: '' };
-          existingUser = await createUserWithId(firebaseUser.uid, createUserData);
-          toast.success('Welcome! Account created successfully');
-        } else {
-          await updateUserLogin(existingUser.id);
-          toast.success('Welcome back!');
+        const cached = localStorage.getItem('user_data');
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          setUser(parsed);
+          setIsSignedIn(true);
         }
-        setUser(existingUser);
-        setIsSignedIn(true);
-        localStorage.setItem('user_data', JSON.stringify(existingUser));
-        await updateUserActivity(existingUser.id);
-      } catch (e) {
-        console.error('Auth state handler error:', e);
-        toast.error('Authentication error');
-      } finally {
-        setIsLoading(false);
+      } catch {}
+      const hasAuthCookie = typeof document !== 'undefined' && document.cookie.includes('lp_authed=1');
+      unsub = onAuthStateChanged(auth, async (firebaseUser) => {
+        console.log('[auth] onAuthStateChanged fired. user?', !!firebaseUser);
+        if (!firebaseUser) {
+          setUser(null);
+          setIsSignedIn(false);
+          localStorage.removeItem('user_data');
+          if (graceTimer) clearTimeout(graceTimer);
+          setIsLoading(false);
+          return;
+        }
+        if (!firebaseUser.phoneNumber) {
+          if (graceTimer) clearTimeout(graceTimer);
+            setIsLoading(false);
+            return;
+        }
+        try {
+          let existingUser = await getUserByPhoneNumber(firebaseUser.phoneNumber);
+          if (!existingUser) {
+            const createUserData: CreateUserData = { phoneNumber: firebaseUser.phoneNumber, firstName: '', lastName: '', email: '' };
+            existingUser = await createUserWithId(firebaseUser.uid, createUserData);
+            toast.success('Welcome! Account created successfully');
+          } else {
+            await updateUserLogin(existingUser.id);
+            if (!localStorage.getItem('user_data')) {
+              toast.success('Welcome back!');
+            }
+          }
+          setUser(existingUser);
+          setIsSignedIn(true);
+          localStorage.setItem('user_data', JSON.stringify(existingUser));
+          await updateUserActivity(existingUser.id);
+        } catch (e) {
+          console.error('Auth state handler error:', e);
+          toast.error('Authentication error');
+        } finally {
+          if (graceTimer) clearTimeout(graceTimer);
+          setIsLoading(false);
+        }
+      });
+      if (hasAuthCookie) {
+        graceTimer = setTimeout(() => {
+          if (!auth.currentUser) {
+            setIsSignedIn(false);
+            setUser(null);
+          }
+          setIsLoading(false);
+        }, 2000);
       }
     });
-    return () => unsub();
+    return () => {
+      if (unsub) unsub();
+      if (graceTimer) clearTimeout(graceTimer);
+    };
   }, []);
 
   const getRecaptcha = () => {
@@ -137,8 +170,16 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     if (!otp) throw new Error('OTP required');
     try {
       setIsLoading(true);
-      if (!confirmationResultRef.current) throw new Error('No OTP in progress');
-      await confirmationResultRef.current.confirm(otp);
+  if (!confirmationResultRef.current) throw new Error('No OTP in progress');
+  await confirmationResultRef.current.confirm(otp);
+      // Persist a simple cookie flag for faster optimistic auth on reload
+      try {
+        const expiryDays = 30;
+        const exp = new Date(Date.now() + expiryDays * 86400000).toUTCString();
+        document.cookie = `lp_authed=1; Expires=${exp}; Path=/; SameSite=Lax`;
+      } catch (cookieErr) {
+        console.warn('Failed to set auth cookie', cookieErr);
+      }
       toast.success('Phone verified');
     } catch (e: unknown) {
       const msg = typeof e === 'object' && e && 'message' in e ? (e as { message?: string }).message : undefined;
@@ -224,11 +265,23 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
               const params = new URLSearchParams(search);
               const code = params.get('code');
               const state = params.get('state');
+              const error = params.get('error');
+              const errorDescription = params.get('error_description');
+              
+              console.log('[linkedin] callback params:', { code: !!code, state, error, errorDescription });
+              
               // Close popup early (server will still respond JSON but we already have code)
               popup.close();
+              
+              if (error) {
+                clearInterval(interval);
+                reject(new Error(`LinkedIn OAuth error: ${error} - ${errorDescription || 'Unknown error'}`));
+                return;
+              }
+              
               if (!code) {
                 clearInterval(interval);
-                reject(new Error('No code returned'));
+                reject(new Error('No authorization code returned from LinkedIn'));
                 return;
               }
               // Exchange code by calling same callback endpoint directly (returns JSON)
