@@ -9,11 +9,9 @@ export async function GET(req: NextRequest) {
     const state = searchParams.get('state');
     const error = searchParams.get('error');
     const errorDescription = searchParams.get('error_description');
-    
-    console.log('[linkedin] callback called with:', { code: !!code, state, error, errorDescription });
 
     if (error) {
-      console.error('[linkedin] OAuth error:', error, errorDescription);
+      console.error('LinkedIn OAuth error:', error, errorDescription);
       return new Response(`
         <html>
           <body>
@@ -30,7 +28,6 @@ export async function GET(req: NextRequest) {
     }
 
     if (!code || !state) {
-      console.error('[linkedin] Missing code or state');
       return new Response(`
         <html>
           <body>
@@ -66,17 +63,14 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    console.log('[linkedin] exchanging code for token...');
     const token = await exchangeLinkedInCode(code);
-    console.log('[linkedin] token exchange successful, fetching profile...');
     const { profile, email } = await fetchLinkedInProfile(token.access_token);
-    console.log('[linkedin] profile fetch successful');
     
     const responseData: Record<string, unknown> = {
       success: true,
       accessToken: token.access_token,
       expiresIn: token.expires_in,
-      scope: 'openid profile email w_member_social', // Add the scope for Firestore storage
+      scope: 'openid profile email w_member_social',
       profile,
       email
     };

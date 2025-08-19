@@ -20,31 +20,20 @@ export function buildLinkedInAuthUrl(state: string) {
   const clientId = process.env.LINKEDIN_CLIENT_ID;
   if (!clientId) throw new Error('Missing LINKEDIN_CLIENT_ID env');
   const redirectUri = getLinkedInRedirectUri();
-  // Debug logging (only in development) to help diagnose redirect mismatches
+  
+  // Basic validation in development
   if (process.env.NODE_ENV !== 'production') {
-    console.log('[linkedin] build auth URL with values =>', {
-      clientId: clientId.slice(0, 4) + '***',
-      redirectUri
-    });
-    // Basic validation: must be absolute and contain /api/auth/linkedin/callback exactly
     const expectedPath = '/api/auth/linkedin/callback';
     try {
       const u = new URL(redirectUri);
       if (u.pathname !== expectedPath) {
-        console.warn(`[linkedin] Redirect path mismatch. Got "${u.pathname}" expected "${expectedPath}".`);
+        console.warn(`LinkedIn redirect path mismatch. Expected "${expectedPath}" but got "${u.pathname}"`);
       }
-      if (!/^https?:$/.test(u.protocol)) {
-        console.warn('[linkedin] Redirect protocol is not http/https, this will fail.');
-      }
-    } catch (e) {
-      console.warn('[linkedin] Invalid redirect URI format', redirectUri, e);
+    } catch {
+      console.warn('Invalid LinkedIn redirect URI format:', redirectUri);
     }
   }
-  // Use scopes available in your LinkedIn Developer Dashboard
-  // openid: OpenID Connect for authentication
-  // profile: Basic profile info (name, photo)
-  // email: Primary email address
-  // w_member_social: Create/modify posts and reactions
+  
   const scope = encodeURIComponent('openid profile email w_member_social');
   return `${LINKEDIN_AUTH_URL}?response_type=code&client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}&scope=${scope}`;
 }
@@ -59,14 +48,6 @@ export async function exchangeLinkedInCode(code: string): Promise<LinkedInTokenR
     client_secret: process.env.LINKEDIN_CLIENT_SECRET!,
   });
   
-  console.log('[linkedin] token exchange request params:', {
-    grant_type: 'authorization_code',
-    code: code.slice(0, 10) + '...',
-    redirect_uri: redirectUri,
-    client_id: process.env.LINKEDIN_CLIENT_ID?.slice(0, 4) + '***',
-    client_secret: process.env.LINKEDIN_CLIENT_SECRET ? '***SET***' : '❌ MISSING'
-  });
-  
   const res = await fetch(`${LINKEDIN_TOKEN_URL}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -74,9 +55,9 @@ export async function exchangeLinkedInCode(code: string): Promise<LinkedInTokenR
   });
   
   const responseText = await res.text();
-  console.log('[linkedin] token exchange response:', { status: res.status, body: responseText });
   
   if (!res.ok) {
+    console.error('LinkedIn token exchange failed:', { status: res.status, error: responseText });
     throw new Error(`Failed to exchange LinkedIn code: ${res.status} ${responseText}`);
   }
   

@@ -70,7 +70,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       } catch {}
       const hasAuthCookie = typeof document !== 'undefined' && document.cookie.includes('lp_authed=1');
       unsub = onAuthStateChanged(auth, async (firebaseUser) => {
-        console.log('[auth] onAuthStateChanged fired. user?', !!firebaseUser);
         if (!firebaseUser) {
           setUser(null);
           setIsSignedIn(false);
@@ -191,31 +190,25 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   };
 
   const signOut = async (): Promise<void> => {
-    console.log('👋 signOut called');
     try {
       setIsLoading(true);
-      console.log('🔥 Signing out from Firebase Auth...');
       
       await firebaseSignOut(auth);
-      console.log('✅ Firebase sign out successful');
       
       // Clear local storage
-      console.log('🧹 Clearing localStorage...');
       localStorage.removeItem('auth_token');
       localStorage.removeItem('user_data');
       
       // Reset state (will also be handled by auth state listener)
-      console.log('🔄 Resetting local state...');
       setUser(null);
       setIsSignedIn(false);
       
       // Clear recaptcha verifier
       if (recaptchaRef.current) {
-        console.log('🧹 Clearing RecaptchaVerifier...');
         try {
           recaptchaRef.current.clear();
-        } catch (e) {
-          console.log('⚠️ RecaptchaVerifier clear failed (may already be cleared):', e);
+        } catch {
+          // RecaptchaVerifier may already be cleared
         }
         recaptchaRef.current = null;
       }
@@ -224,10 +217,9 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       confirmationResultRef.current = null;
       
       toast.success('Signed out successfully');
-      console.log('✅ Sign out completed');
       
     } catch (error) {
-      console.error('❌ Sign out failed:', error);
+      console.error('Sign out failed:', error);
       toast.error('Failed to sign out');
     } finally {
       setIsLoading(false);
@@ -264,11 +256,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
               const search = popup.location.search;
               const params = new URLSearchParams(search);
               const code = params.get('code');
-              const state = params.get('state');
               const error = params.get('error');
               const errorDescription = params.get('error_description');
-              
-              console.log('[linkedin] callback params:', { code: !!code, state, error, errorDescription });
               
               if (error) {
                 popup.close();
@@ -300,7 +289,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
                         const jsonMatch = bodyText.match(/\{.*\}/);
                         if (jsonMatch) {
                           const cbJson = JSON.parse(jsonMatch[0]);
-                          console.log('LinkedIn OAuth response data:', cbJson);
                           
                           // Store LinkedIn tokens and profile data in Firestore
                           try {
@@ -312,7 +300,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
                               expiresIn: cbJson.expiresIn,
                               scope: cbJson.scope
                             });
-                            console.log('LinkedIn tokens and profile stored in Firestore successfully');
                           } catch (firestoreError) {
                             console.error('Failed to store LinkedIn data in Firestore:', firestoreError);
                           }

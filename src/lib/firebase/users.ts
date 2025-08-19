@@ -25,24 +25,19 @@ export async function createUser(userData: CreateUserData): Promise<User> {
 
 // Create a new user document with a provided ID (e.g. Firebase Auth UID)
 export async function createUserWithId(userId: string, userData: CreateUserData): Promise<User> {
-  console.log('🏗️ createUserWithId called with:', { userId, userData });
-  
   // Check if user with this ID already exists (shouldn't happen, but safety check)
   const existingById = await getUserById(userId);
   if (existingById) {
-    console.log('⚠️ User with this ID already exists:', existingById);
     throw new Error('User with this ID already exists');
   }
   
   // Check if user with this phone number already exists
   const existingByPhone = await getUserByPhoneNumber(userData.phoneNumber);
   if (existingByPhone) {
-    console.log('⚠️ User with this phone number already exists:', existingByPhone);
     throw new Error('User with this phone number already exists');
   }
   
   const now = new Date();
-  console.log('📅 Creating user with timestamp:', now);
   
   const newUser: User = {
     id: userId,
@@ -89,7 +84,6 @@ export async function createUserWithId(userId: string, userData: CreateUserData)
     lastActiveAt: now
   };
 
-  console.log('💾 Saving new user to Firestore...');
   await setDoc(doc(db, USERS_COLLECTION, userId), {
     ...newUser,
     createdAt: serverTimestamp(),
@@ -98,22 +92,18 @@ export async function createUserWithId(userId: string, userData: CreateUserData)
     lastActiveAt: serverTimestamp()
   });
 
-  console.log('✅ New user saved to Firestore successfully');
   return newUser;
 }
 
 // Get user by ID
 export async function getUserById(userId: string): Promise<User | null> {
-  console.log('🔍 getUserById called with:', userId);
   try {
     const userDoc = await getDoc(doc(db, USERS_COLLECTION, userId));
     
     if (!userDoc.exists()) {
-      console.log('❌ User not found by ID:', userId);
       return null;
     }
 
-    console.log('✅ User found by ID:', userId);
     const data = userDoc.data();
     const user = {
       ...data,
@@ -123,34 +113,27 @@ export async function getUserById(userId: string): Promise<User | null> {
       updatedAt: data.updatedAt?.toDate() || new Date(),
       lastActiveAt: data.lastActiveAt?.toDate() || new Date(),
     } as User;
-    console.log('📄 User data:', user);
     return user;
   } catch (error) {
-    console.error('❌ Error getting user by ID:', error);
+    console.error('Error getting user by ID:', error);
     return null;
   }
 }
 
 // Get user by phone number
 export async function getUserByPhoneNumber(phoneNumber: string): Promise<User | null> {
-  console.log('📞 getUserByPhoneNumber called with:', phoneNumber);
   try {
     const q = query(
       collection(db, USERS_COLLECTION),
       where('phoneNumber', '==', phoneNumber)
     );
     
-    console.log('🔍 Querying Firestore for phone number...');
     const querySnapshot = await getDocs(q);
     
     if (querySnapshot.empty) {
-      console.log('❌ No user found with phone number:', phoneNumber);
       return null;
     }
 
-    console.log('✅ User found with phone number:', phoneNumber);
-    console.log('📊 Query result size:', querySnapshot.size);
-    
     const userDoc = querySnapshot.docs[0];
     const data = userDoc.data();
     
@@ -163,10 +146,9 @@ export async function getUserByPhoneNumber(phoneNumber: string): Promise<User | 
       lastActiveAt: data.lastActiveAt?.toDate() || new Date(),
     } as User;
     
-    console.log('📄 User data:', user);
     return user;
   } catch (error) {
-    console.error('❌ Error getting user by phone number:', error);
+    console.error('Error getting user by phone number:', error);
     return null;
   }
 }
@@ -288,9 +270,8 @@ export async function connectOAuthAccount(
     };
 
     await updateDoc(doc(db, USERS_COLLECTION, userId), updates);
-    console.log(`✅ ${provider} account connected and saved to Firestore for user ${userId}`);
   } catch (error) {
-    console.error(`❌ Error connecting ${provider} account:`, error);
+    console.error(`Error connecting ${provider} account:`, error);
     throw error;
   }
 }
