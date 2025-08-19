@@ -1,12 +1,29 @@
-'use client';
+"use client";
 
-import React, { createContext, useContext, useEffect, useState } from 'react';
-import { User, AuthState } from '@/types';
+import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
+import { User, CreateUserData } from '@/types/user';
+import { getUserByPhoneNumber, createUserWithId, updateUserLogin, updateUserActivity } from '@/lib/firebase/users';
+import { auth } from '@/lib/firebase/config';
+import { RecaptchaVerifier, signInWithPhoneNumber, ConfirmationResult, onAuthStateChanged, signOut as firebaseSignOut } from 'firebase/auth';
 import toast from 'react-hot-toast';
 
+interface AuthState {
+  user: User | null;
+  isLoading: boolean;
+  isSignedIn: boolean;
+}
+
+// Backward + forward compatible context interface:
+// - Old code used: sendOTP(phone), verifyOTP(otp)
+// - New code (auth/page) expects: signIn(phone) -> { verificationId }, verifyOTP(verificationId, otp)
+// We support both. verifyOTP uses a flexible arg list.
 interface AuthContextType extends AuthState {
+  // New API
   signIn: (phoneNumber: string) => Promise<{ verificationId: string }>;
-  verifyOTP: (verificationId: string, otp: string) => Promise<void>;
+  verifyOTP: (...args: string[]) => Promise<void>; // (otp) OR (verificationId, otp)
+  // Legacy API (alias for signIn & verifyOTP)
+  sendOTP: (phoneNumber: string) => Promise<void>;
+  // Other actions
   signOut: () => Promise<void>;
   linkLinkedin: () => Promise<void>;
   linkGoogle: () => Promise<void>;
@@ -29,153 +46,223 @@ interface AuthProviderProps {
 
 export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isSignedIn, setIsSignedIn] = useState(false);
+  const confirmationResultRef = useRef<ConfirmationResult | null>(null);
+  const recaptchaRef = useRef<RecaptchaVerifier | null>(null);
 
-  // Check if user is logged in on app start
   useEffect(() => {
-    checkAuthStatus();
+    const unsub = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (!firebaseUser) {
+        setUser(null);
+        setIsSignedIn(false);
+        localStorage.removeItem('user_data');
+        return;
+      }
+      if (!firebaseUser.phoneNumber) return;
+      try {
+        let existingUser = await getUserByPhoneNumber(firebaseUser.phoneNumber);
+        if (!existingUser) {
+          const createUserData: CreateUserData = { phoneNumber: firebaseUser.phoneNumber, firstName: '', lastName: '', email: '' };
+            existingUser = await createUserWithId(firebaseUser.uid, createUserData);
+            toast.success('Welcome! Account created successfully');
+        } else {
+          await updateUserLogin(existingUser.id);
+          toast.success('Welcome back!');
+        }
+        setUser(existingUser);
+        setIsSignedIn(true);
+        localStorage.setItem('user_data', JSON.stringify(existingUser));
+        await updateUserActivity(existingUser.id);
+      } catch (e) {
+        console.error('Auth state handler error:', e);
+        toast.error('Authentication error');
+      }
+    });
+    return () => unsub();
   }, []);
 
-  const checkAuthStatus = async () => {
+  const getRecaptcha = () => {
+    if (typeof window === 'undefined') return null;
+    if (recaptchaRef.current) return recaptchaRef.current;
+    let container = document.getElementById('recaptcha-container');
+    if (!container) {
+      container = document.createElement('div');
+      container.id = 'recaptcha-container';
+      document.body.appendChild(container);
+    }
     try {
-      setIsLoading(true);
-      const token = localStorage.getItem('auth_token');
-      
-      if (token) {
-        // In a real app, verify token with backend
-        const userData = localStorage.getItem('user_data');
-        if (userData) {
-          const parsedUser = JSON.parse(userData);
-          setUser(parsedUser);
-          setIsAuthenticated(true);
-        }
-      }
-    } catch (error) {
-      console.error('Auth check failed:', error);
-      localStorage.removeItem('auth_token');
-      localStorage.removeItem('user_data');
-    } finally {
-      setIsLoading(false);
+      recaptchaRef.current = new RecaptchaVerifier(auth, container, { size: 'invisible' });
+      return recaptchaRef.current;
+    } catch (e) {
+      console.error('Recaptcha init failed:', e);
+      return null;
     }
   };
 
+  // New API: signIn returns verificationId; legacy sendOTP wraps it (no return)
   const signIn = async (phoneNumber: string): Promise<{ verificationId: string }> => {
     try {
       setIsLoading(true);
-      
-      // Simulate API call to send OTP
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      // In a real app, this would be handled by Firebase Auth or similar
-      const verificationId = 'mock_verification_id_' + Date.now();
-      
-      toast.success('OTP sent successfully!');
-      return { verificationId };
-    } catch (error) {
-      console.error('Sign in failed:', error);
-      toast.error('Failed to send OTP. Please try again.');
-      throw error;
+      const appVerifier = getRecaptcha();
+      if (!appVerifier) throw new Error('ReCAPTCHA failed to initialize');
+      const phoneRegex = /^\+\d{10,15}$/;
+      if (!phoneRegex.test(phoneNumber)) throw new Error('Invalid phone number format. Use +[countrycode][number]');
+      confirmationResultRef.current = await signInWithPhoneNumber(auth, phoneNumber, appVerifier);
+      toast.success('OTP sent');
+      return { verificationId: confirmationResultRef.current.verificationId };
+    } catch (e: unknown) {
+      const msg = typeof e === 'object' && e && 'message' in e ? (e as { message?: string }).message : undefined;
+      toast.error(msg || 'Failed to send OTP');
+      throw e;
     } finally {
       setIsLoading(false);
     }
   };
 
-  const verifyOTP = async (verificationId: string, otp: string): Promise<void> => {
+  const sendOTP = async (phoneNumber: string) => { await signIn(phoneNumber); };
+
+  // Flexible verifyOTP: verifyOTP(otp) OR verifyOTP(verificationId, otp)
+  const verifyOTP = async (...args: string[]) => {
+    const otp = args.length === 1 ? args[0] : args[1];
+    if (!otp) throw new Error('OTP required');
     try {
       setIsLoading(true);
-      
-      // Simulate OTP verification
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      // Mock successful verification (in real app, verify with backend)
-      if (otp === '123456' || otp.length === 6) {
-        const mockUser: User = {
-          id: 'user_' + Date.now(),
-          phoneNumber: '+1234567890', // In real app, get from verification
-          email: '',
-          displayName: '',
-          photoURL: '',
-          isEmailVerified: false,
-          createdAt: new Date(),
-          updatedAt: new Date(),
-          subscription: {
-            type: 'free',
-            postsRemaining: 1,
-            maxPosts: 1,
-            isActive: true
-          },
-          isLinkedinConnected: false,
-          isGoogleConnected: false
-        };
-
-        // Store auth data
-        const token = 'mock_token_' + Date.now();
-        localStorage.setItem('auth_token', token);
-        localStorage.setItem('user_data', JSON.stringify(mockUser));
-
-        setUser(mockUser);
-        setIsAuthenticated(true);
-        
-        toast.success('Successfully signed in!');
-      } else {
-        throw new Error('Invalid OTP');
-      }
-    } catch (error) {
-      console.error('OTP verification failed:', error);
-      toast.error('Invalid OTP. Please try again.');
-      throw error;
+      if (!confirmationResultRef.current) throw new Error('No OTP in progress');
+      await confirmationResultRef.current.confirm(otp);
+      toast.success('Phone verified');
+    } catch (e: unknown) {
+      const msg = typeof e === 'object' && e && 'message' in e ? (e as { message?: string }).message : undefined;
+      toast.error(msg || 'Invalid OTP');
+      throw e;
     } finally {
       setIsLoading(false);
     }
   };
 
   const signOut = async (): Promise<void> => {
+    console.log('👋 signOut called');
     try {
       setIsLoading(true);
+      console.log('🔥 Signing out from Firebase Auth...');
+      
+      await firebaseSignOut(auth);
+      console.log('✅ Firebase sign out successful');
       
       // Clear local storage
+      console.log('🧹 Clearing localStorage...');
       localStorage.removeItem('auth_token');
       localStorage.removeItem('user_data');
       
-      // Reset state
+      // Reset state (will also be handled by auth state listener)
+      console.log('🔄 Resetting local state...');
       setUser(null);
-      setIsAuthenticated(false);
+      setIsSignedIn(false);
       
-      toast.success('Successfully signed out!');
+      // Clear recaptcha verifier
+      if (recaptchaRef.current) {
+        console.log('🧹 Clearing RecaptchaVerifier...');
+        try {
+          recaptchaRef.current.clear();
+        } catch (e) {
+          console.log('⚠️ RecaptchaVerifier clear failed (may already be cleared):', e);
+        }
+        recaptchaRef.current = null;
+      }
+      
+      // Clear confirmation result
+      confirmationResultRef.current = null;
+      
+      toast.success('Signed out successfully');
+      console.log('✅ Sign out completed');
+      
     } catch (error) {
-      console.error('Sign out failed:', error);
-      toast.error('Failed to sign out. Please try again.');
-      throw error;
+      console.error('❌ Sign out failed:', error);
+      toast.error('Failed to sign out');
     } finally {
       setIsLoading(false);
     }
   };
 
   const linkLinkedin = async (): Promise<void> => {
+    if (!user) {
+      toast.error('Sign in first');
+      return;
+    }
     try {
       setIsLoading(true);
-      
-      // Simulate LinkedIn OAuth flow
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      
-      if (user) {
-        const updatedUser = {
-          ...user,
-          isLinkedinConnected: true,
-          linkedinToken: 'mock_linkedin_token',
-          updatedAt: new Date()
-        };
-        
-        setUser(updatedUser);
-        localStorage.setItem('user_data', JSON.stringify(updatedUser));
-        
-        toast.success('LinkedIn account connected successfully!');
-      }
-    } catch (error) {
+      // Start OAuth flow via API (gets auth URL)
+      const startRes = await fetch('/api/auth/linkedin?action=start');
+      const startJson = await startRes.json();
+      if (!startRes.ok) throw new Error(startJson.error || 'Failed to start OAuth');
+      const authUrl: string = startJson.url;
+
+      const popup = window.open(authUrl, 'linkedin_oauth', 'width=600,height=700');
+      if (!popup) throw new Error('Popup blocked');
+
+      // Poll for redirect completion by monitoring window URL (simple approach)
+      await new Promise<void>((resolve, reject) => {
+        const interval = setInterval(async () => {
+          try {
+            if (popup.closed) {
+              clearInterval(interval);
+              reject(new Error('Popup closed'));
+              return;
+            }
+            const url = popup.location.href;
+            if (url.includes('/api/auth/linkedin/callback')) {
+              const search = popup.location.search;
+              const params = new URLSearchParams(search);
+              const code = params.get('code');
+              const state = params.get('state');
+              // Close popup early (server will still respond JSON but we already have code)
+              popup.close();
+              if (!code) {
+                clearInterval(interval);
+                reject(new Error('No code returned'));
+                return;
+              }
+              // Exchange code by calling same callback endpoint directly (returns JSON)
+              const cbRes = await fetch(`/api/auth/linkedin/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state || '')}`);
+              const cbJson = await cbRes.json();
+              clearInterval(interval);
+              if (!cbRes.ok) {
+                reject(new Error(cbJson.error || 'OAuth failed'));
+                return;
+              }
+              // Update user state
+              const updated: User = {
+                ...user,
+                connectedAccounts: {
+                  ...user.connectedAccounts,
+                  linkedin: {
+                    connected: true,
+                    accessToken: cbJson.accessToken,
+                    profileId: cbJson.profile?.id,
+                    connectedAt: new Date()
+                  }
+                }
+              };
+              setUser(updated);
+              localStorage.setItem('user_data', JSON.stringify(updated));
+              toast.success('LinkedIn connected');
+              resolve();
+            }
+          } catch {
+            // Ignore cross-origin until redirected back
+          }
+        }, 700);
+        // Safety timeout
+        setTimeout(() => {
+          clearInterval(interval);
+          try { popup.close(); } catch {}
+          reject(new Error('OAuth timeout'));
+        }, 1000 * 90);
+      });
+    } catch (error: unknown) {
       console.error('LinkedIn connection failed:', error);
-      toast.error('Failed to connect LinkedIn. Please try again.');
-      throw error;
+      const msg = typeof error === 'object' && error && 'message' in error ? (error as { message?: string }).message : 'Failed to connect LinkedIn';
+  toast.error(msg || 'Failed to connect LinkedIn');
     } finally {
       setIsLoading(false);
     }
@@ -186,25 +273,30 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       setIsLoading(true);
       
       // Simulate Google OAuth flow
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await new Promise(resolve => setTimeout(resolve, 1500));
       
       if (user) {
-        const updatedUser = {
+        const updatedUser: User = {
           ...user,
-          isGoogleConnected: true,
-          googleToken: 'mock_google_token',
-          updatedAt: new Date()
+          connectedAccounts: {
+            ...user.connectedAccounts,
+            google: {
+              connected: true,
+              accessToken: 'mock_google_token',
+              email: 'user@gmail.com',
+              connectedAt: new Date()
+            }
+          }
         };
         
         setUser(updatedUser);
         localStorage.setItem('user_data', JSON.stringify(updatedUser));
-        
-        toast.success('Google account connected successfully!');
+        toast.success('Google account connected!');
       }
+      
     } catch (error) {
       console.error('Google connection failed:', error);
-      toast.error('Failed to connect Google. Please try again.');
-      throw error;
+      toast.error('Failed to connect Google');
     } finally {
       setIsLoading(false);
     }
@@ -212,34 +304,24 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
   const updateUser = async (userData: Partial<User>): Promise<void> => {
     try {
-      setIsLoading(true);
+      if (!user) return;
       
-      if (user) {
-        const updatedUser = {
-          ...user,
-          ...userData,
-          updatedAt: new Date()
-        };
-        
-        setUser(updatedUser);
-        localStorage.setItem('user_data', JSON.stringify(updatedUser));
-        
-        toast.success('Profile updated successfully!');
-      }
+      const updatedUser = { ...user, ...userData };
+      setUser(updatedUser);
+      localStorage.setItem('user_data', JSON.stringify(updatedUser));
+      
     } catch (error) {
       console.error('User update failed:', error);
-      toast.error('Failed to update profile. Please try again.');
-      throw error;
-    } finally {
-      setIsLoading(false);
+      toast.error('Failed to update user');
     }
   };
 
   const value: AuthContextType = {
     user,
     isLoading,
-    isAuthenticated,
+    isSignedIn,
     signIn,
+    sendOTP,
     verifyOTP,
     signOut,
     linkLinkedin,

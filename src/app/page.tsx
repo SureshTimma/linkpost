@@ -4,8 +4,31 @@ import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Icons } from '@/components/ui/icons';
+import { useAuth } from '@/contexts/auth-context';
+import PhoneAuth from '@/components/auth/PhoneAuth';
+import UserProfile from '@/components/auth/UserProfile';
 
 export default function HomePage() {
+  const { isSignedIn } = useAuth();
+
+  // If user is signed in, show their profile
+  if (isSignedIn) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-white via-primary/5 to-accent/10">
+        <div className="container mx-auto px-4 py-12">
+          <div className="text-center mb-12">
+            <h1 className="text-4xl font-bold text-charcoal mb-4">
+              Welcome back to LinkPost
+            </h1>
+            <p className="text-lg text-gray-600">
+              Your LinkedIn automation dashboard
+            </p>
+          </div>
+          <UserProfile />
+        </div>
+      </div>
+    );
+  }
   const features = [
     {
       icon: Icons.Phone,
@@ -199,16 +222,29 @@ export default function HomePage() {
       {/* CTA Section */}
       <section className="py-24 relative overflow-hidden bg-[var(--color-primary)]">
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_30%_30%,rgba(255,255,255,0.18),transparent_70%)]" />
-        <div className="container-padded max-w-4xl text-center relative">
-          <h2 className="text-3xl md:text-4xl font-semibold tracking-tight text-white mb-5">Ready to Automate Your LinkedIn Presence?</h2>
-          <p className="text-lg md:text-xl text-blue-100 mb-10 max-w-2xl mx-auto">Join professionals who trust LinkPost to grow their LinkedIn reach.</p>
-          <Link href="/auth"><Button size="lg" variant="secondary" className="font-semibold">Get Started Free</Button></Link>
+        <div className="container mx-auto px-4 relative z-10">
+          <div className="text-center">
+            <h2 className="text-4xl font-bold text-white mb-6">
+              Ready to Transform Your LinkedIn Presence?
+            </h2>
+            <p className="text-xl text-white/90 mb-12 max-w-2xl mx-auto">
+              Join thousands of professionals who automate their LinkedIn success
+            </p>
+            
+            {/* Authentication Component */}
+            <div className="max-w-md mx-auto">
+              <PhoneAuth onSuccess={() => {
+                // Optionally handle success here
+                console.log('Authentication successful');
+              }} />
+            </div>
+          </div>
         </div>
       </section>
 
       {/* Footer */}
-  <footer className="mt-auto bg-gray-950 py-12 text-sm text-gray-400">
-        <div className="container-padded flex flex-col md:flex-row items-center justify-between gap-6">
+      <footer className="mt-auto bg-gray-950 py-12 text-sm text-gray-400">
+        <div className="container mx-auto px-4 flex flex-col md:flex-row items-center justify-between gap-6">
           <div className="flex items-center">
             <div className="h-9 w-9 bg-[var(--color-primary)] rounded-md flex items-center justify-center">
               <Icons.LinkedIn size={18} color="white" />
