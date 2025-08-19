@@ -4,20 +4,20 @@ import React, { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
-import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '@/components/ui/card';
+import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Icons } from '@/components/ui/icons';
 import { useAuth } from '@/contexts/auth-context';
 import { formatCurrency } from '@/lib/utils';
 
 const DashboardPage: React.FC = () => {
-  const { user, isLoading, isAuthenticated, signOut, linkLinkedin, linkGoogle } = useAuth();
+  const { user, isLoading, isSignedIn, signOut, linkLinkedin, linkGoogle } = useAuth();
   const router = useRouter();
 
   useEffect(() => {
-    if (!isLoading && !isAuthenticated) {
+    if (!isLoading && !isSignedIn) {
       router.push('/auth');
     }
-  }, [isLoading, isAuthenticated, router]);
+  }, [isLoading, isSignedIn, router]);
 
   const handleSignOut = async () => {
     try {
@@ -59,31 +59,42 @@ const DashboardPage: React.FC = () => {
     return null;
   }
 
+  // Adapt to Firestore user schema (subscription: plan/status/postsUsed/postsLimit)
+  const sub = user.subscription;
+  const isPremium = sub.plan === 'premium';
+  const isActivePlan = sub.status === 'active';
+  const maxPostsRaw = sub.postsLimit; // -1 means unlimited for premium
+  const postsRemainingRaw = isPremium
+    ? -1 // unlimited
+    : Math.max(0, sub.postsLimit - sub.postsUsed);
+  const displayMaxPosts = maxPostsRaw === -1 ? '∞' : maxPostsRaw.toString();
+  const displayPostsRemaining = postsRemainingRaw === -1 ? '∞' : postsRemainingRaw.toString();
+
   const stats = [
     {
       title: 'Posts Remaining',
-      value: user.subscription.postsRemaining.toString(),
-      subtitle: `of ${user.subscription.maxPosts}`,
+      value: displayPostsRemaining,
+      subtitle: `of ${displayMaxPosts}`,
       icon: Icons.Edit,
       color: 'text-blue-600'
     },
     {
       title: 'Plan Status',
-      value: user.subscription.type === 'free' ? 'Free Trial' : 'Premium',
-      subtitle: user.subscription.isActive ? 'Active' : 'Inactive',
-      icon: user.subscription.type === 'premium' ? Icons.Crown : Icons.Star,
-      color: user.subscription.type === 'premium' ? 'text-yellow-600' : 'text-gray-600'
+      value: isPremium ? 'Premium' : 'Free',
+      subtitle: isActivePlan ? 'Active' : 'Inactive',
+      icon: isPremium ? Icons.Crown : Icons.Star,
+      color: isPremium ? 'text-yellow-600' : 'text-gray-600'
     },
     {
       title: 'Scheduled Posts',
-      value: '0',
+      value: user.posts?.scheduled?.toString?.() || '0',
       subtitle: 'upcoming',
       icon: Icons.Calendar,
       color: 'text-green-600'
     },
     {
       title: 'Total Posts',
-      value: '0',
+      value: user.posts?.total?.toString?.() || '0',
       subtitle: 'published',
       icon: Icons.BarChart,
       color: 'text-purple-600'
@@ -105,7 +116,7 @@ const DashboardPage: React.FC = () => {
             
             <div className="flex items-center space-x-4">
               <span className="text-sm text-gray-600">
-                Welcome, {user.displayName || user.phoneNumber}
+                Welcome, {user.profile?.firstName || user.phoneNumber}
               </span>
               <Button variant="outline" size="sm" onClick={handleSignOut}>
                 <Icons.LogOut size={16} className="mr-2" />
@@ -237,12 +248,12 @@ const DashboardPage: React.FC = () => {
                     <div>
                       <p className="font-medium">LinkedIn</p>
                       <p className="text-sm text-gray-500">
-                        {user.isLinkedinConnected ? 'Connected' : 'Not connected'}
+                        {user.connectedAccounts?.linkedin?.connected ? 'Connected' : 'Not connected'}
                       </p>
                     </div>
                   </div>
                   
-                  {user.isLinkedinConnected ? (
+                  {user.connectedAccounts?.linkedin?.connected ? (
                     <div className="text-green-500">
                       <Icons.Check size={20} />
                     </div>
@@ -264,12 +275,12 @@ const DashboardPage: React.FC = () => {
                     <div>
                       <p className="font-medium">Google</p>
                       <p className="text-sm text-gray-500">
-                        {user.isGoogleConnected ? 'Connected' : 'Not connected'}
+                        {user.connectedAccounts?.google?.connected ? 'Connected' : 'Not connected'}
                       </p>
                     </div>
                   </div>
                   
-                  {user.isGoogleConnected ? (
+                  {user.connectedAccounts?.google?.connected ? (
                     <div className="text-green-500">
                       <Icons.Check size={20} />
                     </div>
@@ -294,21 +305,21 @@ const DashboardPage: React.FC = () => {
               </CardHeader>
               <CardContent>
                 <div className="text-center">
-                  {user.subscription.type === 'premium' ? (
+                  {isPremium ? (
                     <Icons.Crown size={32} className="mx-auto text-yellow-500 mb-3" />
                   ) : (
                     <Icons.Star size={32} className="mx-auto text-gray-400 mb-3" />
                   )}
                   
                   <h3 className="font-semibold text-lg">
-                    {user.subscription.type === 'premium' ? 'Premium Plan' : 'Free Trial'}
+                    {isPremium ? 'Premium Plan' : 'Free Trial'}
                   </h3>
                   
                   <p className="text-sm text-gray-600 mb-4">
-                    {user.subscription.postsRemaining} of {user.subscription.maxPosts} posts remaining
+                    {displayPostsRemaining} of {displayMaxPosts} posts remaining
                   </p>
 
-                  {user.subscription.type === 'free' && (
+                  {!isPremium && (
                     <Link href="/pricing">
                       <Button className="w-full">
                         Upgrade to Premium

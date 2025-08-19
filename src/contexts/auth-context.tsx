@@ -10,7 +10,8 @@ import toast from 'react-hot-toast';
 interface AuthState {
   user: User | null;
   isLoading: boolean;
-  isSignedIn: boolean;
+  isSignedIn: boolean; // primary flag
+  isAuthenticated: boolean; // alias for consumers expecting this name
 }
 
 // Backward + forward compatible context interface:
@@ -51,21 +52,27 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const confirmationResultRef = useRef<ConfirmationResult | null>(null);
   const recaptchaRef = useRef<RecaptchaVerifier | null>(null);
 
+  // Initialize auth state with a loading phase to prevent premature redirects
   useEffect(() => {
+    setIsLoading(true);
     const unsub = onAuthStateChanged(auth, async (firebaseUser) => {
       if (!firebaseUser) {
         setUser(null);
         setIsSignedIn(false);
         localStorage.removeItem('user_data');
+        setIsLoading(false);
         return;
       }
-      if (!firebaseUser.phoneNumber) return;
+      if (!firebaseUser.phoneNumber) {
+        setIsLoading(false);
+        return;
+      }
       try {
         let existingUser = await getUserByPhoneNumber(firebaseUser.phoneNumber);
         if (!existingUser) {
           const createUserData: CreateUserData = { phoneNumber: firebaseUser.phoneNumber, firstName: '', lastName: '', email: '' };
-            existingUser = await createUserWithId(firebaseUser.uid, createUserData);
-            toast.success('Welcome! Account created successfully');
+          existingUser = await createUserWithId(firebaseUser.uid, createUserData);
+          toast.success('Welcome! Account created successfully');
         } else {
           await updateUserLogin(existingUser.id);
           toast.success('Welcome back!');
@@ -77,6 +84,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       } catch (e) {
         console.error('Auth state handler error:', e);
         toast.error('Authentication error');
+      } finally {
+        setIsLoading(false);
       }
     });
     return () => unsub();
@@ -320,6 +329,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     user,
     isLoading,
     isSignedIn,
+    isAuthenticated: isSignedIn,
     signIn,
     sendOTP,
     verifyOTP,
