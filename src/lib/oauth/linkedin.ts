@@ -9,23 +9,22 @@ interface LinkedInTokenResponse {
   refresh_token?: string;
 }
 
-export function getLinkedInRedirectUri(originFallback?: string) {
-  // Prefer explicit env, else build from provided origin or NEXT_PUBLIC_APP_URL
+export function getLinkedInRedirectUri() {
+  // Always use explicit env if set, otherwise use NEXT_PUBLIC_APP_URL
   if (process.env.LINKEDIN_REDIRECT_URI) return process.env.LINKEDIN_REDIRECT_URI;
-  const base = originFallback || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+  const base = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
   return `${base.replace(/\/$/, '')}/api/auth/linkedin/callback`;
 }
 
-export function buildLinkedInAuthUrl(state: string, originFallback?: string) {
+export function buildLinkedInAuthUrl(state: string) {
   const clientId = process.env.LINKEDIN_CLIENT_ID;
   if (!clientId) throw new Error('Missing LINKEDIN_CLIENT_ID env');
-  const redirectUri = getLinkedInRedirectUri(originFallback);
+  const redirectUri = getLinkedInRedirectUri();
   // Debug logging (only in development) to help diagnose redirect mismatches
   if (process.env.NODE_ENV !== 'production') {
     console.log('[linkedin] build auth URL with values =>', {
       clientId: clientId.slice(0, 4) + '***',
-      redirectUri,
-      originFallback
+      redirectUri
     });
     // Basic validation: must be absolute and contain /api/auth/linkedin/callback exactly
     const expectedPath = '/api/auth/linkedin/callback';
@@ -59,15 +58,29 @@ export async function exchangeLinkedInCode(code: string): Promise<LinkedInTokenR
     client_id: process.env.LINKEDIN_CLIENT_ID!,
     client_secret: process.env.LINKEDIN_CLIENT_SECRET!,
   });
+  
+  console.log('[linkedin] token exchange request params:', {
+    grant_type: 'authorization_code',
+    code: code.slice(0, 10) + '...',
+    redirect_uri: redirectUri,
+    client_id: process.env.LINKEDIN_CLIENT_ID?.slice(0, 4) + '***',
+    client_secret: process.env.LINKEDIN_CLIENT_SECRET ? '***SET***' : '❌ MISSING'
+  });
+  
   const res = await fetch(`${LINKEDIN_TOKEN_URL}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: params.toString(),
   });
+  
+  const responseText = await res.text();
+  console.log('[linkedin] token exchange response:', { status: res.status, body: responseText });
+  
   if (!res.ok) {
-    throw new Error('Failed to exchange LinkedIn code');
+    throw new Error(`Failed to exchange LinkedIn code: ${res.status} ${responseText}`);
   }
-  return res.json();
+  
+  return JSON.parse(responseText);
 }
 
 export async function fetchLinkedInProfile(accessToken: string) {

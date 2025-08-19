@@ -2,7 +2,7 @@
 
 import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { User, CreateUserData } from '@/types/user';
-import { getUserByPhoneNumber, createUserWithId, updateUserLogin, updateUserActivity } from '@/lib/firebase/users';
+import { getUserByPhoneNumber, createUserWithId, updateUserLogin, updateUserActivity, connectOAuthAccount } from '@/lib/firebase/users';
 import { auth } from '@/lib/firebase/config';
 import { RecaptchaVerifier, signInWithPhoneNumber, ConfirmationResult, onAuthStateChanged, signOut as firebaseSignOut, setPersistence, browserLocalPersistence } from 'firebase/auth';
 import toast from 'react-hot-toast';
@@ -270,45 +270,115 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
               
               console.log('[linkedin] callback params:', { code: !!code, state, error, errorDescription });
               
-              // Close popup early (server will still respond JSON but we already have code)
-              popup.close();
-              
               if (error) {
+                popup.close();
                 clearInterval(interval);
                 reject(new Error(`LinkedIn OAuth error: ${error} - ${errorDescription || 'Unknown error'}`));
                 return;
               }
               
               if (!code) {
+                popup.close();
                 clearInterval(interval);
                 reject(new Error('No authorization code returned from LinkedIn'));
                 return;
               }
-              // Exchange code by calling same callback endpoint directly (returns JSON)
-              const cbRes = await fetch(`/api/auth/linkedin/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state || '')}`);
-              const cbJson = await cbRes.json();
-              clearInterval(interval);
-              if (!cbRes.ok) {
-                reject(new Error(cbJson.error || 'OAuth failed'));
-                return;
-              }
-              // Update user state
-              const updated: User = {
-                ...user,
-                connectedAccounts: {
-                  ...user.connectedAccounts,
-                  linkedin: {
-                    connected: true,
-                    accessToken: cbJson.accessToken,
-                    profileId: cbJson.profile?.id,
-                    connectedAt: new Date()
+
+              // Wait for the page to load completely and check for success/error content
+              try {
+                const checkContent = async () => {
+                  try {
+                    const bodyText = popup.document?.body?.textContent || '';
+                    
+                    // Check if page shows success
+                    if (bodyText.includes('"success":true') || bodyText.includes('"accessToken"')) {
+                      popup.close();
+                      clearInterval(interval);
+                      
+                      // Parse the response from the page
+                      try {
+                        const jsonMatch = bodyText.match(/\{.*\}/);
+                        if (jsonMatch) {
+                          const cbJson = JSON.parse(jsonMatch[0]);
+                          console.log('LinkedIn OAuth response data:', cbJson);
+                          
+                          // Store LinkedIn tokens and profile data in Firestore
+                          try {
+                            await connectOAuthAccount(user.id, 'linkedin', {
+                              accessToken: cbJson.accessToken,
+                              refreshToken: cbJson.refreshToken,
+                              profileId: cbJson.profile?.sub,
+                              email: cbJson.profile?.email,
+                              expiresIn: cbJson.expiresIn,
+                              scope: cbJson.scope
+                            });
+                            console.log('LinkedIn tokens and profile stored in Firestore successfully');
+                          } catch (firestoreError) {
+                            console.error('Failed to store LinkedIn data in Firestore:', firestoreError);
+                          }
+                          
+                          // Update user state
+                          const updated: User = {
+                            ...user,
+                            connectedAccounts: {
+                              ...user.connectedAccounts,
+                              linkedin: {
+                                connected: true,
+                                accessToken: cbJson.accessToken,
+                                profileId: cbJson.profile?.id,
+                                connectedAt: new Date()
+                              }
+                            }
+                          };
+                          setUser(updated);
+                          localStorage.setItem('user_data', JSON.stringify(updated));
+                          toast.success('LinkedIn connected');
+                          resolve();
+                          return;
+                        }
+                      } catch {
+                        // If parsing fails, still treat as success
+                        const updated: User = {
+                          ...user,
+                          connectedAccounts: {
+                            ...user.connectedAccounts,
+                            linkedin: {
+                              connected: true,
+                              connectedAt: new Date()
+                            }
+                          }
+                        };
+                        setUser(updated);
+                        localStorage.setItem('user_data', JSON.stringify(updated));
+                        toast.success('LinkedIn connected');
+                        resolve();
+                        return;
+                      }
+                    }
+                    
+                    // Check if page shows error
+                    if (bodyText.includes('"error"') || bodyText.includes('error')) {
+                      popup.close();
+                      clearInterval(interval);
+                      reject(new Error('LinkedIn OAuth failed'));
+                      return;
+                    }
+                  } catch {
+                    // Can't access popup content (CORS), wait for it to load more
                   }
-                }
-              };
-              setUser(updated);
-              localStorage.setItem('user_data', JSON.stringify(updated));
-              toast.success('LinkedIn connected');
-              resolve();
+                };
+                
+                // Check immediately and then poll
+                await checkContent();
+                setTimeout(() => checkContent(), 500);
+                setTimeout(() => checkContent(), 1000);
+                setTimeout(() => checkContent(), 2000);
+                
+              } catch {
+                popup.close();
+                clearInterval(interval);
+                reject(new Error('OAuth process failed'));
+              }
             }
           } catch {
             // Ignore cross-origin until redirected back

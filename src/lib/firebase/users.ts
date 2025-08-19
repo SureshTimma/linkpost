@@ -247,24 +247,50 @@ export async function connectOAuthAccount(
     refreshToken?: string;
     profileId?: string;
     email?: string;
+    expiresIn?: number;
+    scope?: string;
   }
 ): Promise<void> {
   try {
+    const now = new Date();
+    const expiresAt = accountData.expiresIn 
+      ? new Date(now.getTime() + accountData.expiresIn * 1000)
+      : null;
+    
+    // Filter out undefined values since Firestore doesn't support them
+    const accountInfo: Record<string, unknown> = {
+      connected: true,
+      accessToken: accountData.accessToken,
+      connectedAt: serverTimestamp(),
+      lastUsed: serverTimestamp()
+    };
+
+    // Only add non-undefined values
+    if (accountData.refreshToken !== undefined) {
+      accountInfo.refreshToken = accountData.refreshToken;
+    }
+    if (accountData.profileId !== undefined) {
+      accountInfo.profileId = accountData.profileId;
+    }
+    if (accountData.email !== undefined) {
+      accountInfo.email = accountData.email;
+    }
+    if (accountData.scope !== undefined) {
+      accountInfo.scope = accountData.scope;
+    }
+    if (expiresAt !== null) {
+      accountInfo.expiresAt = expiresAt;
+    }
+
     const updates: Record<string, unknown> = {
-      [`connectedAccounts.${provider}`]: {
-        connected: true,
-        accessToken: accountData.accessToken,
-        refreshToken: accountData.refreshToken,
-        profileId: accountData.profileId,
-        email: accountData.email,
-        connectedAt: serverTimestamp()
-      },
+      [`connectedAccounts.${provider}`]: accountInfo,
       updatedAt: serverTimestamp()
     };
 
     await updateDoc(doc(db, USERS_COLLECTION, userId), updates);
+    console.log(`✅ ${provider} account connected and saved to Firestore for user ${userId}`);
   } catch (error) {
-    console.error(`Error connecting ${provider} account:`, error);
+    console.error(`❌ Error connecting ${provider} account:`, error);
     throw error;
   }
 }
