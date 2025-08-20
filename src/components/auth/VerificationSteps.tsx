@@ -10,17 +10,22 @@ import { useAuth } from '@/contexts/auth-context';
 
 interface PhoneVerificationForm {
   phoneNumber: string;
+  otpCode: string;
 }
 
 const VerificationSteps: React.FC = () => {
   const [currentStep, setCurrentStep] = useState<'email' | 'phone' | 'google' | 'linkedin' | 'complete'>('email');
   const [isEditingPhone, setIsEditingPhone] = useState(false);
+  const [otpSent, setOtpSent] = useState(false);
+  const [emailSentTime, setEmailSentTime] = useState<number | null>(null);
+  const [cooldownRemaining, setCooldownRemaining] = useState(0);
   
   const { 
     user, 
     sendEmailVerificationLink, 
     checkEmailVerificationStatus,
-    sendPhoneVerificationCode, 
+    sendPhoneVerificationCode,
+    verifyPhoneCode,
     linkGoogleAccount,
     linkLinkedin,
     getAuthSteps,
@@ -30,6 +35,27 @@ const VerificationSteps: React.FC = () => {
   const phoneForm = useForm<PhoneVerificationForm>();
   
   const authSteps = getAuthSteps();
+
+  // Cooldown timer effect
+  React.useEffect(() => {
+    let interval: NodeJS.Timeout;
+    
+    if (emailSentTime && cooldownRemaining > 0) {
+      interval = setInterval(() => {
+        const elapsed = Math.floor((Date.now() - emailSentTime) / 1000);
+        const remaining = Math.max(0, 60 - elapsed);
+        setCooldownRemaining(remaining);
+        
+        if (remaining === 0) {
+          setEmailSentTime(null);
+        }
+      }, 1000);
+    }
+    
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [emailSentTime, cooldownRemaining]);
 
   // Determine current step based on completion status
   React.useEffect(() => {
@@ -50,12 +76,29 @@ const VerificationSteps: React.FC = () => {
       setCurrentStep('complete');
     }
   }, [authSteps]);
+
+  // Initialize email sent time if user already has verification email sent
+  React.useEffect(() => {
+    if (user?.verification?.emailVerificationSentAt && !emailSentTime) {
+      const sentTime = new Date(user.verification.emailVerificationSentAt).getTime();
+      const now = Date.now();
+      const elapsed = Math.floor((now - sentTime) / 1000);
+      
+      if (elapsed < 60) {
+        setEmailSentTime(sentTime);
+        setCooldownRemaining(60 - elapsed);
+      }
+    }
+  }, [user?.verification?.emailVerificationSentAt, emailSentTime]);
   
   if (!user) return null;
 
   const handleSendEmailVerification = async () => {
     try {
       await sendEmailVerificationLink();
+      const now = Date.now();
+      setEmailSentTime(now);
+      setCooldownRemaining(60);
     } catch {
       // Error handled by auth context
     }
@@ -72,7 +115,17 @@ const VerificationSteps: React.FC = () => {
   const handleSendPhoneCode = async (data: PhoneVerificationForm) => {
     try {
       await sendPhoneVerificationCode(data.phoneNumber);
+      setOtpSent(true);
       setIsEditingPhone(false); // Close edit mode on success
+    } catch {
+      // Error handled by auth context
+    }
+  };
+
+  const handleVerifyOtpCode = async (data: PhoneVerificationForm) => {
+    try {
+      await verifyPhoneCode(data.otpCode);
+      setOtpSent(false);
     } catch {
       // Error handled by auth context
     }
@@ -165,12 +218,15 @@ const VerificationSteps: React.FC = () => {
           <CardContent>
             <div className="space-y-4">
               <p className="text-sm text-gray-600">
-                Click the button below to send a verification email to your inbox.
+                {emailSentTime 
+                  ? "Verification email sent! Check your inbox and spam folder."
+                  : "Click the button below to send a verification email to your inbox."
+                }
               </p>
               <div className="flex space-x-2">
                 <Button 
                   onClick={handleSendEmailVerification}
-                  disabled={isLoading}
+                  disabled={isLoading || cooldownRemaining > 0}
                   variant="outline"
                   className="flex-1"
                 >
@@ -178,6 +234,16 @@ const VerificationSteps: React.FC = () => {
                     <>
                       <Icons.Spinner size={16} className="mr-2" />
                       Sending...
+                    </>
+                  ) : cooldownRemaining > 0 ? (
+                    <>
+                      <Icons.Clock size={16} className="mr-2" />
+                      Resend in {cooldownRemaining}s
+                    </>
+                  ) : emailSentTime ? (
+                    <>
+                      <Icons.Refresh size={16} className="mr-2" />
+                      Resend Email
                     </>
                   ) : (
                     <>
@@ -206,6 +272,11 @@ const VerificationSteps: React.FC = () => {
               </div>
               <p className="text-xs text-gray-500">
                 After clicking the link in your email, click &quot;Check Status&quot; to verify.
+                {emailSentTime && (
+                  <span className="block mt-1 text-green-600">
+                    ✓ Verification email sent to {user.email}
+                  </span>
+                )}
               </p>
             </div>
           </CardContent>
@@ -221,19 +292,110 @@ const VerificationSteps: React.FC = () => {
               Verify Your Phone
             </CardTitle>
             <CardDescription>
-              {isEditingPhone 
-                ? "Update your phone number below" 
-                : "Your phone number is verified (SMS verification will be added in a future update)"
+              {user.verification.phoneVerified 
+                ? "Your phone number is verified" 
+                : otpSent 
+                ? "Enter the 6-digit OTP sent to your phone" 
+                : isEditingPhone 
+                ? "Update your phone number below"
+                : "Add and verify your phone number for enhanced security"
               }
             </CardDescription>
           </CardHeader>
           <CardContent>
-            {!isEditingPhone ? (
+            {user.verification.phoneVerified ? (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between p-3 bg-green-50 rounded-lg border border-green-200">
+                  <div className="flex items-center">
+                    <Icons.Check size={20} className="mr-3 text-green-600" />
+                    <span className="font-medium">{user.phoneNumber}</span>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setIsEditingPhone(true);
+                      setOtpSent(false);
+                    }}
+                    className="ml-2"
+                  >
+                    <Icons.Edit size={16} className="mr-1" />
+                    Change
+                  </Button>
+                </div>
+                <p className="text-sm text-green-600">
+                  ✓ Your phone number has been verified and saved to your account.
+                </p>
+              </div>
+            ) : otpSent ? (
+              <form onSubmit={phoneForm.handleSubmit(handleVerifyOtpCode)} className="space-y-4">
+                <div>
+                  <Input
+                    {...phoneForm.register('otpCode', { 
+                      required: 'OTP code is required',
+                      pattern: {
+                        value: /^\d{6}$/,
+                        message: 'OTP must be 6 digits'
+                      }
+                    })}
+                    placeholder="Enter 6-digit OTP"
+                    maxLength={6}
+                    disabled={isLoading}
+                    className="text-center text-lg tracking-widest"
+                  />
+                  {phoneForm.formState.errors.otpCode && (
+                    <p className="text-red-500 text-sm mt-1">
+                      {phoneForm.formState.errors.otpCode.message}
+                    </p>
+                  )}
+                </div>
+                <div className="flex space-x-2">
+                  <Button type="submit" disabled={isLoading} className="flex-1">
+                    {isLoading ? (
+                      <>
+                        <Icons.Spinner size={16} className="mr-2" />
+                        Verifying...
+                      </>
+                    ) : (
+                      <>
+                        <Icons.Check size={16} className="mr-2" />
+                        Verify OTP
+                      </>
+                    )}
+                  </Button>
+                  <Button 
+                    type="button" 
+                    variant="outline" 
+                    onClick={() => setOtpSent(false)}
+                    disabled={isLoading}
+                  >
+                    Back
+                  </Button>
+                </div>
+                <p className="text-sm text-gray-600 text-center">
+                  Didn&apos;t receive the code? Check your messages or try again.
+                </p>
+              </form>
+            ) : !isEditingPhone && !user.phoneNumber ? (
+              <div className="space-y-4">
+                <p className="text-sm text-gray-600">
+                  Add your phone number to receive important notifications and enhance account security.
+                </p>
+                <Button
+                  onClick={() => setIsEditingPhone(true)}
+                  className="w-full"
+                >
+                  <Icons.Phone size={16} className="mr-2" />
+                  Add Phone Number
+                </Button>
+              </div>
+            ) : !isEditingPhone ? (
               <div className="space-y-4">
                 <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
                   <div className="flex items-center">
                     <Icons.Phone size={20} className="mr-3 text-gray-600" />
                     <span className="font-medium">{user.phoneNumber}</span>
+                    <span className="ml-2 text-sm text-orange-600">(Not verified)</span>
                   </div>
                   <Button
                     variant="outline"
@@ -245,9 +407,26 @@ const VerificationSteps: React.FC = () => {
                     Edit
                   </Button>
                 </div>
-                <p className="text-sm text-gray-600">
-                  Your phone number has been verified and saved to your account.
-                </p>
+                <Button
+                  onClick={() => {
+                    phoneForm.setValue('phoneNumber', user.phoneNumber);
+                    handleSendPhoneCode({ phoneNumber: user.phoneNumber, otpCode: '' });
+                  }}
+                  disabled={isLoading}
+                  className="w-full"
+                >
+                  {isLoading ? (
+                    <>
+                      <Icons.Spinner size={16} className="mr-2" />
+                      Sending OTP...
+                    </>
+                  ) : (
+                    <>
+                      <Icons.Phone size={16} className="mr-2" />
+                      Send OTP
+                    </>
+                  )}
+                </Button>
               </div>
             ) : (
               <form onSubmit={phoneForm.handleSubmit(handleSendPhoneCode)} className="space-y-4">
@@ -275,12 +454,12 @@ const VerificationSteps: React.FC = () => {
                     {isLoading ? (
                       <>
                         <Icons.Spinner size={16} className="mr-2" />
-                        Updating...
+                        Sending OTP...
                       </>
                     ) : (
                       <>
                         <Icons.Phone size={16} className="mr-2" />
-                        Update Phone Number
+                        Send OTP
                       </>
                     )}
                   </Button>
@@ -293,8 +472,13 @@ const VerificationSteps: React.FC = () => {
                     Cancel
                   </Button>
                 </div>
+                <p className="text-sm text-gray-600">
+                  We&apos;ll send a 6-digit verification code to this number.
+                </p>
               </form>
             )}
+            {/* Invisible reCAPTCHA container */}
+            <div id="recaptcha-container"></div>
           </CardContent>
         </Card>
       )}
@@ -398,6 +582,9 @@ const VerificationSteps: React.FC = () => {
           </CardContent>
         </Card>
       )}
+      
+      {/* Recaptcha container for phone verification */}
+      <div id="recaptcha-container"></div>
     </div>
   );
 };

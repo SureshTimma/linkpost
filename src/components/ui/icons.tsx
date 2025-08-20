@@ -198,6 +198,14 @@ export const Icons = {
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" className={className}>
       <path stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>
     </svg>
+  ),
+
+  // Refresh
+  Refresh: ({ size = 24, className = '', color = 'currentColor' }: IconProps) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" className={className}>
+      <path stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M1 4v6h6M23 20v-6h-6"/>
+      <path stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/>
+    </svg>
   )
 };
 

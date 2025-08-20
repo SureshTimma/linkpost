@@ -418,3 +418,16 @@ export async function markPhoneVerificationSent(userId: string): Promise<void> {
     throw error;
   }
 }
+
+// Update user phone number
+export async function updateUserPhoneNumber(userId: string, phoneNumber: string): Promise<void> {
+  try {
+    await updateDoc(doc(db, USERS_COLLECTION, userId), {
+      phoneNumber: phoneNumber,
+      updatedAt: serverTimestamp()
+    });
+  } catch (error) {
+    console.error('Error updating user phone number:', error);
+    throw error;
+  }
+}

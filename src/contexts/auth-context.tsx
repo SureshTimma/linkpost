@@ -9,6 +9,7 @@ import {
   updateUserActivity,
   updateEmailVerification,
   updatePhoneVerification,
+  updateUserPhoneNumber,
   markEmailVerificationSent,
   connectOAuthAccount
 } from '@/lib/firebase/users';
@@ -23,9 +24,16 @@ import {
   ConfirmationResult,
   setPersistence,
   browserLocalPersistence,
-  User as FirebaseUser
+  User as FirebaseUser,
+  RecaptchaVerifier,
+  PhoneAuthProvider,
+  linkWithCredential
 } from 'firebase/auth';
 import toast from 'react-hot-toast';
+
+interface PhoneVerificationResult {
+  verificationId: string;
+}
 
 interface AuthState {
   user: User | null;
@@ -76,7 +84,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSignedIn, setIsSignedIn] = useState(false);
-  const [confirmationResult, setConfirmationResult] = useState<ConfirmationResult | null>(null);
+  const [confirmationResult, setConfirmationResult] = useState<ConfirmationResult | PhoneVerificationResult | null>(null);
+  const [recaptchaVerifier, setRecaptchaVerifier] = useState<RecaptchaVerifier | null>(null);
 
   useEffect(() => {
     let unsubscribe: (() => void) | null = null;
@@ -105,15 +114,44 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
           }
 
           try {
-            const existingUser = await getUserById(firebaseUser.uid);
+            let existingUser = await getUserById(firebaseUser.uid);
             
             if (!existingUser) {
-              // This shouldn't happen with our new flow, but handle gracefully
-              console.warn('Firebase user exists but no Firestore user found');
-              setUser(null);
-              setIsSignedIn(false);
-              setIsLoading(false);
-              return;
+              console.warn('Firebase user exists but no Firestore user found, attempting to create...');
+              
+              // Try to get user data from localStorage or create minimal user
+              const storedUserData = localStorage.getItem('temp_user_data');
+              if (storedUserData) {
+                try {
+                  const userData = JSON.parse(storedUserData);
+                  existingUser = await createUserWithId(firebaseUser.uid, userData);
+                  localStorage.removeItem('temp_user_data');
+                  console.log('Created missing user document from stored data');
+                } catch (createError) {
+                  console.error('Failed to create user document:', createError);
+                }
+              }
+              
+              // If still no user, create with minimal Firebase Auth data
+              if (!existingUser) {
+                try {
+                  const minimalUserData: CreateUserData = {
+                    email: firebaseUser.email || '',
+                    phoneNumber: firebaseUser.phoneNumber || '',
+                    firstName: firebaseUser.displayName?.split(' ')[0] || 'User',
+                    lastName: firebaseUser.displayName?.split(' ').slice(1).join(' ') || ''
+                  };
+                  existingUser = await createUserWithId(firebaseUser.uid, minimalUserData);
+                  console.log('Created user document with Firebase Auth data');
+                } catch (createError) {
+                  console.error('Failed to create minimal user document:', createError);
+                  toast.error('Account setup error. Please contact support.');
+                  setUser(null);
+                  setIsSignedIn(false);
+                  setIsLoading(false);
+                  return;
+                }
+              }
             }
 
             // Sync email verification status from Firebase Auth to Firestore
@@ -159,18 +197,26 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     try {
       setIsLoading(true);
       
-      // Create Firebase Auth user first - Firebase Auth will handle duplicate email checking
-      const userCredential = await createUserWithEmailAndPassword(auth, data.email, data.password);
-      
-      // Create Firestore user document
+      // Store user data temporarily in case Firestore creation fails
       const userData: CreateUserData = {
         email: data.email,
         phoneNumber: data.phoneNumber,
         firstName: data.firstName,
         lastName: data.lastName
       };
+      localStorage.setItem('temp_user_data', JSON.stringify(userData));
       
-      await createUserWithId(userCredential.user.uid, userData);
+      // Create Firebase Auth user first - Firebase Auth will handle duplicate email checking
+      const userCredential = await createUserWithEmailAndPassword(auth, data.email, data.password);
+      
+      // Create Firestore user document
+      try {
+        await createUserWithId(userCredential.user.uid, userData);
+        localStorage.removeItem('temp_user_data'); // Clean up on success
+      } catch (firestoreError) {
+        console.error('Firestore user creation failed:', firestoreError);
+        // Don't throw - let the auth state handler create the document
+      }
       
       // Send email verification
       await sendEmailVerification(userCredential.user);
@@ -262,7 +308,10 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       
       await sendEmailVerification(auth.currentUser);
       await markEmailVerificationSent(auth.currentUser.uid);
-      toast.success('Verification email sent!');
+      
+      // Check if this is a resend by looking at user's verification status
+      const isResend = user?.verification?.emailVerificationSentAt;
+      toast.success(isResend ? 'Verification email resent! Check your inbox.' : 'Verification email sent! Check your inbox.');
     } catch (error: unknown) {
       console.error('Email verification error:', error);
       toast.error('Failed to send verification email');
@@ -302,28 +351,49 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         throw new Error('No user signed in');
       }
 
-      // For now, let's skip SMS verification and just update the phone number
-      // This is a simplified approach - you can enable SMS later when Firebase is fully configured
+      // Ensure user document exists before proceeding
+      const existingUser = await getUserById(auth.currentUser.uid);
+      if (!existingUser) {
+        throw new Error('User account not properly set up. Please contact support.');
+      }
+
+      // Initialize RecaptchaVerifier if not already done
+      if (!recaptchaVerifier) {
+        const verifier = new RecaptchaVerifier(auth, 'recaptcha-container', {
+          size: 'invisible',
+          callback: () => {
+            // reCAPTCHA solved
+          }
+        });
+        setRecaptchaVerifier(verifier);
+      }
+
+      // Get phone auth credential
+      const phoneProvider = new PhoneAuthProvider(auth);
+      const verificationId = await phoneProvider.verifyPhoneNumber(phoneNumber, recaptchaVerifier!);
       
-      // Update local state
-      const updatedUser = { ...user };
-      updatedUser.phoneNumber = phoneNumber;
+      // Store verification ID for later verification
+      setConfirmationResult({ verificationId });
       
-      // For development, we'll mark phone as verified immediately
-      // In production, you would send SMS and verify the code
-      await updatePhoneVerification(auth.currentUser.uid, true);
-      updatedUser.verification.phoneVerified = true;
+      // Update phone number in Firestore (but don't mark as verified yet)
+      await updateUserPhoneNumber(auth.currentUser.uid, phoneNumber);
+      
+      // Update local state with phone number but keep verification false
+      const updatedUser = { 
+        ...user, 
+        phoneNumber: phoneNumber
+      };
       
       setUser(updatedUser);
       localStorage.setItem('user_data', JSON.stringify(updatedUser));
 
-      toast.success('Phone number updated and verified!');
+      toast.success('OTP sent to your phone number!');
       
     } catch (error: unknown) {
       console.error('Phone verification error:', error);
       const errorMessage = error && typeof error === 'object' && 'code' in error 
         ? `Phone verification failed: ${error.code}`
-        : 'Failed to update phone number';
+        : 'Failed to send verification code';
       toast.error(errorMessage);
       throw error;
     }
@@ -332,20 +402,53 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const verifyPhoneCode = async (code: string): Promise<void> => {
     try {
       if (!confirmationResult) {
-        throw new Error('No verification in progress');
+        throw new Error('No verification in progress. Please request OTP first.');
       }
       
-      if (!auth.currentUser) {
+      if (!auth.currentUser || !user) {
         throw new Error('No user signed in');
       }
 
-      await confirmationResult.confirm(code);
+      // Ensure user document exists before proceeding
+      const existingUser = await getUserById(auth.currentUser.uid);
+      if (!existingUser) {
+        throw new Error('User account not properly set up. Please contact support.');
+      }
+
+      // Create phone credential and link to existing user
+      const credential = PhoneAuthProvider.credential(
+        (confirmationResult as PhoneVerificationResult).verificationId, 
+        code
+      );
+      
+      // Link phone credential to existing email-based account
+      await linkWithCredential(auth.currentUser, credential);
+      
+      // Mark phone as verified in Firestore
       await updatePhoneVerification(auth.currentUser.uid, true);
+      
+      // Update local state to mark phone as verified
+      const updatedUser = { 
+        ...user, 
+        verification: {
+          ...user.verification,
+          phoneVerified: true
+        }
+      };
+      
+      setUser(updatedUser);
+      localStorage.setItem('user_data', JSON.stringify(updatedUser));
+      
+      // Clear confirmation result
       setConfirmationResult(null);
-      toast.success('Phone number verified!');
+      
+      toast.success('Phone number verified and linked successfully!');
     } catch (error: unknown) {
       console.error('Phone code verification error:', error);
-      toast.error('Invalid verification code');
+      const errorMessage = error && typeof error === 'object' && 'code' in error 
+        ? `Phone verification failed: ${error.code}`
+        : 'Invalid verification code. Please try again.';
+      toast.error(errorMessage);
       throw error;
     }
   };
@@ -386,16 +489,37 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
       const result = await signInWithPopup(auth, googleProvider);
       
+      // Verify that Google email matches the user's registered email
+      if (result.user.email !== user.email) {
+        throw new Error(`Google email (${result.user.email}) does not match your registered email (${user.email}). Please use the correct Google account.`);
+      }
+      
       const googleData = {
         accessToken: '', // You may need to get this from the credential
         email: result.user.email || '',
       };
       
       await connectOAuthAccount(auth.currentUser.uid, 'google', googleData);
+      
+      // Update local user state to reflect Google connection
+      if (user) {
+        const updatedUser = { ...user };
+        updatedUser.connectedAccounts.google = {
+          connected: true,
+          email: result.user.email || '',
+          connectedAt: new Date()
+        };
+        setUser(updatedUser);
+        localStorage.setItem('user_data', JSON.stringify(updatedUser));
+      }
+      
       toast.success('Google account linked successfully!');
     } catch (error: unknown) {
       console.error('Google link error:', error);
-      toast.error('Failed to link Google account');
+      const message = error && typeof error === 'object' && 'message' in error 
+        ? String(error.message) 
+        : 'Failed to link Google account';
+      toast.error(message);
       throw error;
     }
   };
