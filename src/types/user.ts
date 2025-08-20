@@ -75,6 +75,6 @@ export interface UpdateUserData {
 }
 
 export interface AuthStep {
-  step: 'email-verification' | 'phone-verification' | 'google-connection' | 'complete';
+  step: 'email-verification' | 'phone-verification' | 'google-connection' | 'linkedin-connection' | 'complete';
   completed: boolean;
 }

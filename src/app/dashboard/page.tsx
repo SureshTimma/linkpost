@@ -15,16 +15,19 @@ const NewDashboardPage: React.FC = () => {
 
   useEffect(() => {
     if (!isLoading && !isSignedIn) {
-      router.push('/auth');
+      router.replace('/auth');
     }
   }, [isLoading, isSignedIn, router]);
 
   const handleSignOut = async () => {
     try {
       await signOut();
-      router.push('/');
     } catch (error) {
       console.error('Sign out failed:', error);
+    } finally {
+      // Always redirect to home page regardless of success/failure
+      // Use replace to prevent going back to dashboard
+      router.replace('/');
     }
   };
 

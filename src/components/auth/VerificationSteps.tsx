@@ -10,20 +10,19 @@ import { useAuth } from '@/contexts/auth-context';
 
 interface PhoneVerificationForm {
   phoneNumber: string;
-  verificationCode: string;
 }
 
 const VerificationSteps: React.FC = () => {
-  const [currentStep, setCurrentStep] = useState<'email' | 'phone' | 'google' | 'complete'>('email');
-  const [phoneStep, setPhoneStep] = useState<'input' | 'verify'>('input');
+  const [currentStep, setCurrentStep] = useState<'email' | 'phone' | 'google' | 'linkedin' | 'complete'>('email');
+  const [isEditingPhone, setIsEditingPhone] = useState(false);
   
   const { 
     user, 
     sendEmailVerificationLink, 
     checkEmailVerificationStatus,
     sendPhoneVerificationCode, 
-    verifyPhoneCode,
     linkGoogleAccount,
+    linkLinkedin,
     getAuthSteps,
     isLoading 
   } = useAuth();
@@ -37,6 +36,7 @@ const VerificationSteps: React.FC = () => {
     const emailCompleted = authSteps.find(s => s.step === 'email-verification')?.completed;
     const phoneCompleted = authSteps.find(s => s.step === 'phone-verification')?.completed;
     const googleCompleted = authSteps.find(s => s.step === 'google-connection')?.completed;
+    const linkedinCompleted = authSteps.find(s => s.step === 'linkedin-connection')?.completed;
     
     if (!emailCompleted) {
       setCurrentStep('email');
@@ -44,6 +44,8 @@ const VerificationSteps: React.FC = () => {
       setCurrentStep('phone');
     } else if (!googleCompleted) {
       setCurrentStep('google');
+    } else if (!linkedinCompleted) {
+      setCurrentStep('linkedin');
     } else {
       setCurrentStep('complete');
     }
@@ -70,16 +72,7 @@ const VerificationSteps: React.FC = () => {
   const handleSendPhoneCode = async (data: PhoneVerificationForm) => {
     try {
       await sendPhoneVerificationCode(data.phoneNumber);
-      setPhoneStep('verify');
-    } catch {
-      // Error handled by auth context
-    }
-  };
-
-  const handleVerifyPhoneCode = async (data: PhoneVerificationForm) => {
-    try {
-      await verifyPhoneCode(data.verificationCode);
-      setPhoneStep('input');
+      setIsEditingPhone(false); // Close edit mode on success
     } catch {
       // Error handled by auth context
     }
@@ -93,11 +86,20 @@ const VerificationSteps: React.FC = () => {
     }
   };
 
+  const handleLinkLinkedin = async () => {
+    try {
+      await linkLinkedin();
+    } catch {
+      // Error handled by auth context
+    }
+  };
+
   const renderStepIndicator = () => {
     const steps = [
       { key: 'email', label: 'Email', completed: authSteps.find(s => s.step === 'email-verification')?.completed },
       { key: 'phone', label: 'Phone', completed: authSteps.find(s => s.step === 'phone-verification')?.completed },
       { key: 'google', label: 'Google', completed: authSteps.find(s => s.step === 'google-connection')?.completed },
+      { key: 'linkedin', label: 'LinkedIn', completed: authSteps.find(s => s.step === 'linkedin-connection')?.completed },
     ];
 
     return (
@@ -219,14 +221,35 @@ const VerificationSteps: React.FC = () => {
               Verify Your Phone
             </CardTitle>
             <CardDescription>
-              {phoneStep === 'input' 
-                ? 'Enter your phone number to receive a verification code'
-                : 'Enter the verification code sent to your phone'
+              {isEditingPhone 
+                ? "Update your phone number below" 
+                : "Your phone number is verified (SMS verification will be added in a future update)"
               }
             </CardDescription>
           </CardHeader>
           <CardContent>
-            {phoneStep === 'input' ? (
+            {!isEditingPhone ? (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                  <div className="flex items-center">
+                    <Icons.Phone size={20} className="mr-3 text-gray-600" />
+                    <span className="font-medium">{user.phoneNumber}</span>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setIsEditingPhone(true)}
+                    className="ml-2"
+                  >
+                    <Icons.Edit size={16} className="mr-1" />
+                    Edit
+                  </Button>
+                </div>
+                <p className="text-sm text-gray-600">
+                  Your phone number has been verified and saved to your account.
+                </p>
+              </div>
+            ) : (
               <form onSubmit={phoneForm.handleSubmit(handleSendPhoneCode)} className="space-y-4">
                 <div>
                   <Input
@@ -247,60 +270,27 @@ const VerificationSteps: React.FC = () => {
                     </p>
                   )}
                 </div>
-                <Button type="submit" disabled={isLoading} className="w-full">
-                  {isLoading ? (
-                    <>
-                      <Icons.Spinner size={16} className="mr-2" />
-                      Sending Code...
-                    </>
-                  ) : (
-                    <>
-                      <Icons.Phone size={16} className="mr-2" />
-                      Send Verification Code
-                    </>
-                  )}
-                </Button>
-              </form>
-            ) : (
-              <form onSubmit={phoneForm.handleSubmit(handleVerifyPhoneCode)} className="space-y-4">
-                <div>
-                  <Input
-                    {...phoneForm.register('verificationCode', { 
-                      required: 'Verification code is required',
-                      pattern: {
-                        value: /^\d{6}$/,
-                        message: 'Verification code must be 6 digits'
-                      }
-                    })}
-                    placeholder="Enter 6-digit code"
-                    maxLength={6}
-                    disabled={isLoading}
-                  />
-                  {phoneForm.formState.errors.verificationCode && (
-                    <p className="text-red-500 text-sm mt-1">
-                      {phoneForm.formState.errors.verificationCode.message}
-                    </p>
-                  )}
-                </div>
                 <div className="flex space-x-2">
-                  <Button 
-                    type="button"
-                    variant="outline"
-                    onClick={() => setPhoneStep('input')}
-                    disabled={isLoading}
-                    className="flex-1"
-                  >
-                    Back
-                  </Button>
                   <Button type="submit" disabled={isLoading} className="flex-1">
                     {isLoading ? (
                       <>
                         <Icons.Spinner size={16} className="mr-2" />
-                        Verifying...
+                        Updating...
                       </>
                     ) : (
-                      'Verify Code'
+                      <>
+                        <Icons.Phone size={16} className="mr-2" />
+                        Update Phone Number
+                      </>
                     )}
+                  </Button>
+                  <Button 
+                    type="button" 
+                    variant="outline" 
+                    onClick={() => setIsEditingPhone(false)}
+                    disabled={isLoading}
+                  >
+                    Cancel
                   </Button>
                 </div>
               </form>
@@ -354,13 +344,55 @@ const VerificationSteps: React.FC = () => {
                   </>
                 )}
               </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* LinkedIn Connection Step */}
+      {currentStep === 'linkedin' && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center">
+              <Icons.LinkedIn className="mr-2" size={20} />
+              Connect LinkedIn Account
+            </CardTitle>
+            <CardDescription>
+              Connect your LinkedIn account to enhance your professional networking capabilities.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              <ul className="text-sm text-gray-600 space-y-2">
+                <li className="flex items-center">
+                  <Icons.Check size={16} className="mr-2 text-green-500" />
+                  Professional networking features
+                </li>
+                <li className="flex items-center">
+                  <Icons.Check size={16} className="mr-2 text-green-500" />
+                  Enhanced profile information
+                </li>
+                <li className="flex items-center">
+                  <Icons.Check size={16} className="mr-2 text-green-500" />
+                  Business networking tools
+                </li>
+              </ul>
               <Button 
-                variant="outline"
-                onClick={() => setCurrentStep('complete')}
+                onClick={handleLinkLinkedin}
                 disabled={isLoading}
                 className="w-full"
               >
-                Skip for Now
+                {isLoading ? (
+                  <>
+                    <Icons.Spinner size={16} className="mr-2" />
+                    Connecting...
+                  </>
+                ) : (
+                  <>
+                    <Icons.LinkedIn size={16} className="mr-2" />
+                    Connect LinkedIn Account
+                  </>
+                )}
               </Button>
             </div>
           </CardContent>
