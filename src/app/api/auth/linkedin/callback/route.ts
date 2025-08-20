@@ -16,7 +16,17 @@ export async function GET(req: NextRequest) {
         <html>
           <body>
             <script>
-              window.postMessage({ error: "${error}", description: "${errorDescription}" }, "*");
+              (function(){
+                const payload = { error: "${error}", description: "${errorDescription}" };
+                try {
+                  if (window.opener && !window.opener.closed) {
+                    window.opener.postMessage(payload, window.location.origin);
+                  } else {
+                    console.warn('LinkedIn error payload has no opener');
+                  }
+                } catch(e){ console.error(e); }
+                setTimeout(() => { try { window.close(); } catch(e){} }, 500);
+              })();
             </script>
             <div id="result">{"error":"${error}","description":"${errorDescription}"}</div>
           </body>
@@ -32,7 +42,15 @@ export async function GET(req: NextRequest) {
         <html>
           <body>
             <script>
-              window.postMessage({ error: "missing_params" }, "*");
+              (function(){
+                const payload = { error: "missing_params" };
+                try {
+                  if (window.opener && !window.opener.closed) {
+                    window.opener.postMessage(payload, window.location.origin);
+                  }
+                } catch(e){}
+                setTimeout(() => { try { window.close(); } catch(e){} }, 500);
+              })();
             </script>
             <div id="result">{"error":"missing_params"}</div>
           </body>
@@ -52,7 +70,15 @@ export async function GET(req: NextRequest) {
         <html>
           <body>
             <script>
-              window.postMessage({ error: "invalid_state" }, "*");
+              (function(){
+                const payload = { error: "invalid_state" };
+                try {
+                  if (window.opener && !window.opener.closed) {
+                    window.opener.postMessage(payload, window.location.origin);
+                  }
+                } catch(e){}
+                setTimeout(() => { try { window.close(); } catch(e){} }, 500);
+              })();
             </script>
             <div id="result">{"error":"invalid_state"}</div>
           </body>
@@ -84,8 +110,18 @@ export async function GET(req: NextRequest) {
       <html>
         <body>
           <script>
-            window.postMessage(${JSON.stringify(responseData)}, "*");
-            window.close();
+            (function(){
+              const payload = ${JSON.stringify(responseData)};
+              try {
+                if (window.opener && !window.opener.closed) {
+                  window.opener.postMessage(payload, window.location.origin);
+                } else {
+                  console.warn('No opener to receive LinkedIn success payload');
+                }
+              } catch(e){ console.error('PostMessage error', e); }
+              // give parent time to process message
+              setTimeout(() => { try { window.close(); } catch(e){} }, 500);
+            })();
           </script>
           <div id="result">${JSON.stringify(responseData)}</div>
         </body>
@@ -102,7 +138,15 @@ export async function GET(req: NextRequest) {
       <html>
         <body>
           <script>
-            window.postMessage({ error: "oauth_failed", message: "${msg}" }, "*");
+            (function(){
+              const payload = { error: "oauth_failed", message: "${msg}" };
+              try {
+                if (window.opener && !window.opener.closed) {
+                  window.opener.postMessage(payload, window.location.origin);
+                }
+              } catch(e){}
+              setTimeout(() => { try { window.close(); } catch(e){} }, 800);
+            })();
           </script>
           <div id="result">{"error":"oauth_failed","message":"${msg}"}</div>
         </body>

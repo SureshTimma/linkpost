@@ -564,7 +564,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         throw new Error('Popup blocked - please allow popups for LinkedIn authentication');
       }
 
-      // Listen for the OAuth callback response
+      // Listen for the OAuth callback response (single-use listener)
       const result = await new Promise<{
         accessToken: string;
         profile: { id: string; email?: string; [key: string]: unknown };
@@ -573,34 +573,50 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         scope?: string;
         expiresIn?: number;
       }>((resolve, reject) => {
-        const checkClosed = setInterval(() => {
-          if (popup.closed) {
-            clearInterval(checkClosed);
-            reject(new Error('LinkedIn authentication was cancelled'));
+        let settled = false;
+        // when we get a valid message we mark settled; a brief grace period avoids race with close
+        const timeout = setTimeout(() => {
+          if (!settled) {
+            settled = true;
+            try { popup.close(); } catch {}
+            reject(new Error('LinkedIn authentication timed out'));
           }
-        }, 1000);
+        }, 1000 * 60); // 60s timeout
+
+        const checkClosed = setInterval(() => {
+          if (popup.closed && !settled) {
+            // allow a 300ms grace period after close in case message just dispatched
+            setTimeout(() => {
+              if (!settled) {
+                clearInterval(checkClosed);
+                clearTimeout(timeout);
+                settled = true;
+                reject(new Error('LinkedIn authentication was cancelled'));
+              }
+            }, 300);
+          }
+        }, 400);
 
         const messageHandler = (event: MessageEvent) => {
-          if (event.origin !== window.location.origin) {
-            return;
-          }
-
+          if (event.origin !== window.location.origin) return;
+          if (settled) return;
+          settled = true;
           clearInterval(checkClosed);
+          clearTimeout(timeout);
           window.removeEventListener('message', messageHandler);
-          popup.close();
-
-          if (event.data.error) {
+          try { popup.close(); } catch {}
+          if (event.data?.error) {
             reject(new Error(event.data.description || event.data.message || event.data.error));
-          } else if (event.data.success) {
-            console.log('LinkedIn OAuth success data:', event.data);
+          } else if (event.data?.success) {
             resolve(event.data);
+          } else {
+            reject(new Error('Unexpected LinkedIn response'));
           }
         };
-
-        window.addEventListener('message', messageHandler);
+        window.addEventListener('message', messageHandler, { once: false });
       });
 
-      // Save LinkedIn data to Firestore
+      // Prepare data for persistence
       const linkedinData = {
         accessToken: result.accessToken,
         refreshToken: result.refreshToken || '',
@@ -609,42 +625,31 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         scope: result.scope || '',
         expiresIn: result.expiresIn || 0
       };
-      
-      console.log('Saving LinkedIn data:', linkedinData);
-      console.log('User ID:', auth.currentUser.uid);
-      
-      // Ensure user document exists before connecting LinkedIn
+
+      // Ensure user doc exists
       let userDoc = await getUserById(auth.currentUser.uid);
       if (!userDoc) {
-        console.log('User document not found, creating one...');
-        // Create user document if it doesn't exist
-        const tempUserData = JSON.parse(localStorage.getItem('temp_user_data') || '{}');
-        userDoc = await createUserWithId(auth.currentUser.uid, {
-          email: auth.currentUser.email || tempUserData.email || '',
-          firstName: tempUserData.firstName || 'User',
-          lastName: tempUserData.lastName || '',
-          phoneNumber: tempUserData.phoneNumber || ''
-        });
-        console.log('User document created:', userDoc);
+        const basicData = {
+          email: auth.currentUser.email || '',
+          firstName: auth.currentUser.displayName?.split(' ')[0] || 'User',
+          lastName: auth.currentUser.displayName?.split(' ').slice(1).join(' ') || '',
+          phoneNumber: auth.currentUser.phoneNumber || ''
+        };
+        userDoc = await createUserWithId(auth.currentUser.uid, basicData);
       }
-      
-      await connectOAuthAccount(auth.currentUser.uid, 'linkedin', linkedinData);
-      console.log('LinkedIn data saved successfully');
 
-      // Update local user state
-      const updatedUser = { ...user };
-      updatedUser.connectedAccounts.linkedin = {
-        connected: true,
-        accessToken: result.accessToken,
-        refreshToken: result.refreshToken || '',
-        profileId: result.profile?.id || '',
-        connectedAt: new Date()
-      };
-      
-      setUser(updatedUser);
-      localStorage.setItem('user_data', JSON.stringify(updatedUser));
-      
-      toast.success('LinkedIn account linked successfully!');
+      // Persist LinkedIn connection
+      await connectOAuthAccount(auth.currentUser.uid, 'linkedin', linkedinData);
+
+      // Re-fetch to confirm persistence (source of truth)
+      const refreshed = await getUserById(auth.currentUser.uid);
+      if (!refreshed?.connectedAccounts.linkedin?.connected) {
+        throw new Error('LinkedIn connection failed to persist');
+      }
+
+      setUser(refreshed);
+      localStorage.setItem('user_data', JSON.stringify(refreshed));
+      toast.success('LinkedIn account linked successfully');
     } catch (error: unknown) {
       console.error('LinkedIn link error:', error);
       const message = error && typeof error === 'object' && 'message' in error 
