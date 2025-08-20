@@ -13,20 +13,39 @@ const NewDashboardPage: React.FC = () => {
   const { user, isLoading, isSignedIn, signOut, getAuthSteps, refreshUserData } = useAuth();
   const router = useRouter();
 
-  // Refresh user data on component mount to ensure verification status is current
+  // Smart refresh user data - only refresh when actually needed
   useEffect(() => {
-    const refreshData = async () => {
-      if (isSignedIn && user) {
-        try {
+    const smartRefreshData = async () => {
+      if (!isSignedIn || !user) return;
+
+      try {
+        // Check when we last refreshed data
+        const lastRefresh = localStorage.getItem('dashboard_last_refresh');
+        const lastRefreshTime = lastRefresh ? parseInt(lastRefresh) : 0;
+        const fiveMinutesAgo = Date.now() - (5 * 60 * 1000);
+
+        // Only refresh if:
+        // 1. User is not fully verified (verification status might change)
+        // 2. Data is older than 5 minutes
+        // 3. This is the first load (no cached timestamp)
+        const needsVerification = !user.verification?.emailVerified || !user.verification?.phoneVerified;
+        const dataIsStale = lastRefreshTime < fiveMinutesAgo;
+        const isFirstLoad = !lastRefresh;
+
+        if (needsVerification || dataIsStale || isFirstLoad) {
+          console.log('Dashboard: Refreshing user data - verification needed or data stale');
           await refreshUserData();
-        } catch (error) {
-          console.error('Failed to refresh user data:', error);
+          localStorage.setItem('dashboard_last_refresh', Date.now().toString());
+        } else {
+          console.log('Dashboard: Skipping refresh - user verified and data is recent');
         }
+      } catch (error) {
+        console.error('Failed to refresh user data:', error);
       }
     };
 
-    refreshData();
-  }, [isSignedIn, user, refreshUserData]);
+    smartRefreshData();
+  }, [isSignedIn, user, refreshUserData]); // Keep original dependencies
 
   useEffect(() => {
     // Only redirect if auth is definitely not loading and user is not signed in

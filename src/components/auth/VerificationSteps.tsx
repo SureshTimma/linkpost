@@ -66,20 +66,30 @@ const VerificationSteps: React.FC = () => {
     };
   }, [emailSentTime, cooldownRemaining]);
 
-  // Refresh user data on component mount to ensure verification status is current
+  // Smart refresh only when component mounts and verification is needed
   React.useEffect(() => {
-    const refreshData = async () => {
-      if (user) {
+    const smartRefreshData = async () => {
+      if (!user) return;
+
+      // Check if user needs verification
+      const needsEmailVerification = !user.verification?.emailVerified;
+      const needsPhoneVerification = !user.verification?.phoneVerified;
+      
+      // Only refresh if verification is actually needed
+      if (needsEmailVerification || needsPhoneVerification) {
         try {
+          console.log('VerificationSteps: Refreshing user data for verification status');
           await refreshUserData();
         } catch (error) {
           console.error('Failed to refresh user data in verification steps:', error);
         }
+      } else {
+        console.log('VerificationSteps: User already verified, skipping refresh');
       }
     };
 
-    refreshData();
-  }, [user, refreshUserData]);
+    smartRefreshData();
+  }, [user, refreshUserData]); // Keep original dependencies to satisfy linter
 
   // Determine current step based on completion status
   React.useEffect(() => {
@@ -138,11 +148,28 @@ const VerificationSteps: React.FC = () => {
     }
   };
 
+  // Rate limited refresh to prevent excessive calls
+  let lastRefreshTime = 0;
+  const refreshWithRateLimit = async () => {
+    const now = Date.now();
+    if (now - lastRefreshTime > 2000) { // Only refresh every 2 seconds
+      lastRefreshTime = now;
+      try {
+        console.log('VerificationSteps: Rate-limited refresh user data');
+        await refreshUserData();
+      } catch (error) {
+        console.error('Rate-limited refresh failed:', error);
+      }
+    } else {
+      console.log('VerificationSteps: Skipping refresh due to rate limit');
+    }
+  };
+
   const handleCheckEmailStatus = async () => {
     try {
       await checkEmailVerificationStatus();
-      // Refresh user data to ensure we have the latest verification status
-      await refreshUserData();
+      // Use rate-limited refresh to prevent excessive calls
+      await refreshWithRateLimit();
     } catch {
       // Error handled by auth context
     }
@@ -162,8 +189,8 @@ const VerificationSteps: React.FC = () => {
     try {
       await verifyPhoneCode(data.otpCode);
       setOtpSent(false);
-      // Refresh user data to ensure we have the latest verification status
-      await refreshUserData();
+      // Use rate-limited refresh to prevent excessive calls
+      await refreshWithRateLimit();
     } catch {
       // Error handled by auth context
     }
@@ -172,8 +199,8 @@ const VerificationSteps: React.FC = () => {
   const handleLinkGoogle = async () => {
     try {
       await linkGoogleAccount();
-      // Refresh user data to ensure we have the latest verification status
-      await refreshUserData();
+      // Use rate-limited refresh to prevent excessive calls
+      await refreshWithRateLimit();
     } catch {
       // Error handled by auth context
     }
@@ -182,8 +209,8 @@ const VerificationSteps: React.FC = () => {
   const handleLinkLinkedin = async () => {
     try {
       await linkLinkedin();
-      // Refresh user data to ensure we have the latest verification status
-      await refreshUserData();
+      // Use rate-limited refresh to prevent excessive calls
+      await refreshWithRateLimit();
     } catch {
       // Error handled by auth context
     }
