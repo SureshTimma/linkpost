@@ -1,15 +1,21 @@
 // src/types/user.ts
 export interface User {
   id: string;
+  email: string;
   phoneNumber: string;
   createdAt: Date;
   lastLoginAt: Date;
   updatedAt: Date;
   profile: {
-    firstName?: string;
-    lastName?: string;
-    email?: string;
+    firstName: string;
+    lastName: string;
     profilePicture?: string;
+  };
+  verification: {
+    emailVerified: boolean;
+    phoneVerified: boolean;
+    emailVerificationSentAt?: Date;
+    phoneVerificationSentAt?: Date;
   };
   subscription: {
     plan: 'free' | 'premium';
@@ -55,14 +61,20 @@ export interface User {
 }
 
 export interface CreateUserData {
+  email: string;
   phoneNumber: string;
-  firstName?: string;
-  lastName?: string;
-  email?: string;
+  firstName: string;
+  lastName: string;
 }
 
 export interface UpdateUserData {
   profile?: Partial<User['profile']>;
   preferences?: Partial<User['preferences']>;
   connectedAccounts?: Partial<User['connectedAccounts']>;
+  verification?: Partial<User['verification']>;
+}
+
+export interface AuthStep {
+  step: 'email-verification' | 'phone-verification' | 'google-connection' | 'complete';
+  completed: boolean;
 }

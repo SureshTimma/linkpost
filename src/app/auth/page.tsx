@@ -8,70 +8,76 @@ import { Input } from '@/components/ui/input';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Icons } from '@/components/ui/icons';
 import { useAuth } from '@/contexts/auth-context';
-import { validatePhoneNumber } from '@/lib/utils';
 
-interface PhoneAuthForm {
+interface RegisterForm {
+  firstName: string;
+  lastName: string;
+  email: string;
   phoneNumber: string;
+  password: string;
+  confirmPassword: string;
 }
 
-interface OTPForm {
-  otp: string;
+interface LoginForm {
+  email: string;
+  password: string;
 }
 
-const AuthPage: React.FC = () => {
-  const [step, setStep] = useState<'phone' | 'otp'>('phone');
-  const [verificationId, setVerificationId] = useState<string>('');
-  const { signIn, verifyOTP, isLoading } = useAuth();
+const NewAuthPage: React.FC = () => {
+  const [isLogin, setIsLogin] = useState(false);
+  const { registerWithEmail, signInWithEmail, signInWithGoogle, isLoading } = useAuth();
   const router = useRouter();
 
-  const phoneForm = useForm<PhoneAuthForm>();
-  const otpForm = useForm<OTPForm>();
+  const registerForm = useForm<RegisterForm>();
+  const loginForm = useForm<LoginForm>();
 
-  const handlePhoneSubmit = async (data: PhoneAuthForm) => {
-    if (!validatePhoneNumber(data.phoneNumber)) {
-      phoneForm.setError('phoneNumber', {
+  const handleRegisterSubmit = async (data: RegisterForm) => {
+    if (data.password !== data.confirmPassword) {
+      registerForm.setError('confirmPassword', {
         type: 'manual',
-        message: 'Please enter a valid phone number'
+        message: 'Passwords do not match'
+      });
+      return;
+    }
+
+    if (data.password.length < 6) {
+      registerForm.setError('password', {
+        type: 'manual',
+        message: 'Password must be at least 6 characters'
       });
       return;
     }
 
     try {
-      const result = await signIn(data.phoneNumber);
-      setVerificationId(result.verificationId);
-      setStep('otp');
-    } catch (error) {
-      phoneForm.setError('phoneNumber', {
-        type: 'manual',
-        message: 'Failed to send OTP. Please try again.'
+      await registerWithEmail({
+        firstName: data.firstName,
+        lastName: data.lastName,
+        email: data.email,
+        phoneNumber: data.phoneNumber,
+        password: data.password
       });
-    }
-  };
-
-  const handleOTPSubmit = async (data: OTPForm) => {
-    if (data.otp.length !== 6) {
-      otpForm.setError('otp', {
-        type: 'manual',
-        message: 'OTP must be 6 digits'
-      });
-      return;
-    }
-
-    try {
-      await verifyOTP(verificationId, data.otp);
       router.push('/dashboard');
-    } catch (error) {
-      otpForm.setError('otp', {
-        type: 'manual',
-        message: 'Invalid OTP. Please try again.'
-      });
+    } catch {
+      // Error is already handled by the auth context
     }
   };
 
-  const handleBackToPhone = () => {
-    setStep('phone');
-    setVerificationId('');
-    otpForm.reset();
+  const handleLoginSubmit = async (data: LoginForm) => {
+    try {
+      await signInWithEmail(data.email, data.password);
+      router.push('/dashboard');
+    } catch {
+      // Error is already handled by the auth context
+    }
+  };
+
+  const handleGoogleSignIn = async () => {
+    try {
+      await signInWithGoogle();
+      router.push('/dashboard');
+    } catch {
+      // Error is already handled by the auth context
+    }
   };
 
   return (
@@ -94,85 +100,231 @@ const AuthPage: React.FC = () => {
         <Card>
           <CardHeader>
             <CardTitle>
-              {step === 'phone' ? 'Sign in with Phone' : 'Verify OTP'}
+              {isLogin ? 'Sign In' : 'Create Account'}
             </CardTitle>
             <CardDescription>
-              {step === 'phone' 
-                ? 'Enter your phone number to receive a verification code'
-                : 'Enter the 6-digit code sent to your phone'
+              {isLogin 
+                ? 'Sign in to your account to continue'
+                : 'Create a new account to get started'
               }
             </CardDescription>
           </CardHeader>
-
-          <CardContent>
-            {step === 'phone' ? (
-              <form onSubmit={phoneForm.handleSubmit(handlePhoneSubmit)} className="space-y-4">
-                <Input
-                  type="tel"
-                  label="Phone Number"
-                  placeholder="+1 (555) 123-4567"
-                  {...phoneForm.register('phoneNumber', { required: 'Phone number is required' })}
-                  error={phoneForm.formState.errors.phoneNumber?.message}
+          <CardContent className="space-y-6">
+            {/* Google Sign In Button - Only show for login */}
+            {isLogin && (
+              <>
+                <Button
+                  onClick={handleGoogleSignIn}
                   disabled={isLoading}
-                />
-                
-                <Button 
-                  type="submit" 
-                  className="w-full" 
-                  loading={isLoading}
-                  disabled={isLoading}
+                  variant="outline"
+                  className="w-full"
                 >
-                  <Icons.Phone size={16} className="mr-2" />
-                  Send OTP
+                  {isLoading ? (
+                    <Icons.Spinner size={16} className="mr-2" />
+                  ) : (
+                    <Icons.Google size={16} className="mr-2" />
+                  )}
+                  Continue with Google
+                </Button>
+
+                <div className="relative">
+                  <div className="absolute inset-0 flex items-center">
+                    <span className="w-full border-t" />
+                  </div>
+                  <div className="relative flex justify-center text-xs uppercase">
+                    <span className="bg-white px-2 text-muted-foreground">
+                      Or continue with email
+                    </span>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* Registration Form */}
+            {!isLogin && (
+              <form onSubmit={registerForm.handleSubmit(handleRegisterSubmit)} className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Input
+                      {...registerForm.register('firstName', { required: 'First name is required' })}
+                      placeholder="First Name"
+                      disabled={isLoading}
+                    />
+                    {registerForm.formState.errors.firstName && (
+                      <p className="text-red-500 text-sm mt-1">
+                        {registerForm.formState.errors.firstName.message}
+                      </p>
+                    )}
+                  </div>
+                  <div>
+                    <Input
+                      {...registerForm.register('lastName', { required: 'Last name is required' })}
+                      placeholder="Last Name"
+                      disabled={isLoading}
+                    />
+                    {registerForm.formState.errors.lastName && (
+                      <p className="text-red-500 text-sm mt-1">
+                        {registerForm.formState.errors.lastName.message}
+                      </p>
+                    )}
+                  </div>
+                </div>
+                
+                <div>
+                  <Input
+                    {...registerForm.register('email', { 
+                      required: 'Email is required',
+                      pattern: {
+                        value: /^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i,
+                        message: 'Invalid email address'
+                      }
+                    })}
+                    type="email"
+                    placeholder="Email Address"
+                    disabled={isLoading}
+                  />
+                  {registerForm.formState.errors.email && (
+                    <p className="text-red-500 text-sm mt-1">
+                      {registerForm.formState.errors.email.message}
+                    </p>
+                  )}
+                </div>
+
+                <div>
+                  <Input
+                    {...registerForm.register('phoneNumber', { 
+                      required: 'Phone number is required',
+                      pattern: {
+                        value: /^\+\d{10,15}$/,
+                        message: 'Phone number must be in format +1234567890'
+                      }
+                    })}
+                    placeholder="Phone Number (+1234567890)"
+                    disabled={isLoading}
+                  />
+                  {registerForm.formState.errors.phoneNumber && (
+                    <p className="text-red-500 text-sm mt-1">
+                      {registerForm.formState.errors.phoneNumber.message}
+                    </p>
+                  )}
+                </div>
+
+                <div>
+                  <Input
+                    {...registerForm.register('password', { 
+                      required: 'Password is required',
+                      minLength: {
+                        value: 6,
+                        message: 'Password must be at least 6 characters'
+                      }
+                    })}
+                    type="password"
+                    placeholder="Password"
+                    disabled={isLoading}
+                  />
+                  {registerForm.formState.errors.password && (
+                    <p className="text-red-500 text-sm mt-1">
+                      {registerForm.formState.errors.password.message}
+                    </p>
+                  )}
+                </div>
+
+                <div>
+                  <Input
+                    {...registerForm.register('confirmPassword', { required: 'Please confirm your password' })}
+                    type="password"
+                    placeholder="Confirm Password"
+                    disabled={isLoading}
+                  />
+                  {registerForm.formState.errors.confirmPassword && (
+                    <p className="text-red-500 text-sm mt-1">
+                      {registerForm.formState.errors.confirmPassword.message}
+                    </p>
+                  )}
+                </div>
+
+                <Button type="submit" className="w-full" disabled={isLoading}>
+                  {isLoading ? (
+                    <>
+                      <Icons.Spinner size={16} className="mr-2" />
+                      Creating Account...
+                    </>
+                  ) : (
+                    'Create Account'
+                  )}
                 </Button>
               </form>
-            ) : (
-              <form onSubmit={otpForm.handleSubmit(handleOTPSubmit)} className="space-y-4">
-                <Input
-                  type="text"
-                  label="Verification Code"
-                  placeholder="123456"
-                  maxLength={6}
-                  {...otpForm.register('otp', { required: 'OTP is required' })}
-                  error={otpForm.formState.errors.otp?.message}
-                  disabled={isLoading}
-                />
-                
-                <div className="space-y-3">
-                  <Button 
-                    type="submit" 
-                    className="w-full" 
-                    loading={isLoading}
+            )}
+
+            {/* Login Form */}
+            {isLogin && (
+              <form onSubmit={loginForm.handleSubmit(handleLoginSubmit)} className="space-y-4">
+                <div>
+                  <Input
+                    {...loginForm.register('email', { 
+                      required: 'Email is required',
+                      pattern: {
+                        value: /^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i,
+                        message: 'Invalid email address'
+                      }
+                    })}
+                    type="email"
+                    placeholder="Email Address"
                     disabled={isLoading}
-                  >
-                    <Icons.Shield size={16} className="mr-2" />
-                    Verify OTP
-                  </Button>
-                  
-                  <Button 
-                    type="button" 
-                    variant="outline" 
-                    className="w-full" 
-                    onClick={handleBackToPhone}
-                    disabled={isLoading}
-                  >
-                    Back to Phone Number
-                  </Button>
+                  />
+                  {loginForm.formState.errors.email && (
+                    <p className="text-red-500 text-sm mt-1">
+                      {loginForm.formState.errors.email.message}
+                    </p>
+                  )}
                 </div>
+
+                <div>
+                  <Input
+                    {...loginForm.register('password', { required: 'Password is required' })}
+                    type="password"
+                    placeholder="Password"
+                    disabled={isLoading}
+                  />
+                  {loginForm.formState.errors.password && (
+                    <p className="text-red-500 text-sm mt-1">
+                      {loginForm.formState.errors.password.message}
+                    </p>
+                  )}
+                </div>
+
+                <Button type="submit" className="w-full" disabled={isLoading}>
+                  {isLoading ? (
+                    <>
+                      <Icons.Spinner size={16} className="mr-2" />
+                      Signing In...
+                    </>
+                  ) : (
+                    'Sign In'
+                  )}
+                </Button>
               </form>
             )}
+
+            {/* Toggle between login and register */}
+            <div className="text-center">
+              <button
+                type="button"
+                onClick={() => setIsLogin(!isLogin)}
+                className="text-sm text-blue-600 hover:text-blue-500"
+                disabled={isLoading}
+              >
+                {isLogin 
+                  ? "Don't have an account? Sign up" 
+                  : "Already have an account? Sign in"
+                }
+              </button>
+            </div>
           </CardContent>
         </Card>
-
-        {/* Features */}
-        <div className="text-center text-sm text-gray-500">
-          <p>🔒 Secure authentication with phone verification</p>
-          <p>📱 Connect LinkedIn & Google accounts</p>
-          <p>🚀 Start with 1 free post, upgrade for unlimited</p>
-        </div>
       </div>
     </div>
   );
 };
 
-export default AuthPage;
+export default NewAuthPage;

@@ -1,34 +1,62 @@
 "use client";
 
-import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
-import { User, CreateUserData } from '@/types/user';
-import { getUserByPhoneNumber, createUserWithId, updateUserLogin, updateUserActivity, connectOAuthAccount } from '@/lib/firebase/users';
-import { auth } from '@/lib/firebase/config';
-import { RecaptchaVerifier, signInWithPhoneNumber, ConfirmationResult, onAuthStateChanged, signOut as firebaseSignOut, setPersistence, browserLocalPersistence } from 'firebase/auth';
+import React, { createContext, useContext, useEffect, useState } from 'react';
+import { User, CreateUserData, AuthStep } from '@/types/user';
+import { 
+  getUserById, 
+  createUserWithId, 
+  updateUserLogin, 
+  updateUserActivity,
+  updateEmailVerification,
+  updatePhoneVerification,
+  markEmailVerificationSent,
+  markPhoneVerificationSent,
+  connectOAuthAccount 
+} from '@/lib/firebase/users';
+import { auth, googleProvider } from '@/lib/firebase/config';
+import { 
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  signInWithPopup,
+  signOut as firebaseSignOut,
+  onAuthStateChanged,
+  sendEmailVerification,
+  RecaptchaVerifier,
+  signInWithPhoneNumber,
+  ConfirmationResult,
+  setPersistence,
+  browserLocalPersistence,
+  User as FirebaseUser
+} from 'firebase/auth';
 import toast from 'react-hot-toast';
 
 interface AuthState {
   user: User | null;
   isLoading: boolean;
-  isSignedIn: boolean; // primary flag
-  isAuthenticated: boolean; // alias for consumers expecting this name
+  isSignedIn: boolean;
+  isAuthenticated: boolean;
 }
 
-// Backward + forward compatible context interface:
-// - Old code used: sendOTP(phone), verifyOTP(otp)
-// - New code (auth/page) expects: signIn(phone) -> { verificationId }, verifyOTP(verificationId, otp)
-// We support both. verifyOTP uses a flexible arg list.
 interface AuthContextType extends AuthState {
-  // New API
-  signIn: (phoneNumber: string) => Promise<{ verificationId: string }>;
-  verifyOTP: (...args: string[]) => Promise<void>; // (otp) OR (verificationId, otp)
-  // Legacy API (alias for signIn & verifyOTP)
-  sendOTP: (phoneNumber: string) => Promise<void>;
-  // Other actions
+  // Registration
+  registerWithEmail: (data: CreateUserData & { password: string }) => Promise<void>;
+  
+  // Login
+  signInWithEmail: (email: string, password: string) => Promise<void>;
+  signInWithGoogle: () => Promise<void>;
+  
+  // Verification
+  sendEmailVerificationLink: () => Promise<void>;
+  sendPhoneVerificationCode: (phoneNumber: string) => Promise<void>;
+  verifyPhoneCode: (code: string) => Promise<void>;
+  
+  // Account management
   signOut: () => Promise<void>;
-  linkLinkedin: () => Promise<void>;
-  linkGoogle: () => Promise<void>;
+  linkGoogleAccount: () => Promise<void>;
   updateUser: (userData: Partial<User>) => Promise<void>;
+  
+  // Verification status
+  getAuthSteps: () => AuthStep[];
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -47,392 +75,308 @@ interface AuthProviderProps {
 
 export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const [isSignedIn, setIsSignedIn] = useState(false);
-  const confirmationResultRef = useRef<ConfirmationResult | null>(null);
-  const recaptchaRef = useRef<RecaptchaVerifier | null>(null);
+  const [confirmationResult, setConfirmationResult] = useState<ConfirmationResult | null>(null);
 
   useEffect(() => {
-    let unsub: (() => void) | null = null;
-    let graceTimer: NodeJS.Timeout | null = null;
-    setIsLoading(true);
-    setPersistence(auth, browserLocalPersistence).catch(err => {
-      console.warn('Auth persistence setup failed:', err);
-    }).finally(() => {
-      // optimistic from cache
+    let unsubscribe: (() => void) | null = null;
+
+    const initAuth = async () => {
       try {
-        const cached = localStorage.getItem('user_data');
-        if (cached) {
-          const parsed = JSON.parse(cached);
-          setUser(parsed);
-          setIsSignedIn(true);
-        }
-      } catch {}
-      const hasAuthCookie = typeof document !== 'undefined' && document.cookie.includes('lp_authed=1');
-      unsub = onAuthStateChanged(auth, async (firebaseUser) => {
-        if (!firebaseUser) {
-          setUser(null);
-          setIsSignedIn(false);
-          localStorage.removeItem('user_data');
-          if (graceTimer) clearTimeout(graceTimer);
-          setIsLoading(false);
-          return;
-        }
-        if (!firebaseUser.phoneNumber) {
-          if (graceTimer) clearTimeout(graceTimer);
+        await setPersistence(auth, browserLocalPersistence);
+        
+        // Check for cached user data
+        try {
+          const cached = localStorage.getItem('user_data');
+          if (cached) {
+            const parsed = JSON.parse(cached);
+            setUser(parsed);
+            setIsSignedIn(true);
+          }
+        } catch {}
+
+        unsubscribe = onAuthStateChanged(auth, async (firebaseUser: FirebaseUser | null) => {
+          if (!firebaseUser) {
+            setUser(null);
+            setIsSignedIn(false);
+            localStorage.removeItem('user_data');
             setIsLoading(false);
             return;
-        }
-        try {
-          let existingUser = await getUserByPhoneNumber(firebaseUser.phoneNumber);
-          if (!existingUser) {
-            const createUserData: CreateUserData = { phoneNumber: firebaseUser.phoneNumber, firstName: '', lastName: '', email: '' };
-            existingUser = await createUserWithId(firebaseUser.uid, createUserData);
-            toast.success('Welcome! Account created successfully');
-          } else {
+          }
+
+          try {
+            const existingUser = await getUserById(firebaseUser.uid);
+            
+            if (!existingUser) {
+              // This shouldn't happen with our new flow, but handle gracefully
+              console.warn('Firebase user exists but no Firestore user found');
+              setUser(null);
+              setIsSignedIn(false);
+              setIsLoading(false);
+              return;
+            }
+
+            // Update login timestamp
             await updateUserLogin(existingUser.id);
+            
+            setUser(existingUser);
+            setIsSignedIn(true);
+            localStorage.setItem('user_data', JSON.stringify(existingUser));
+            
+            // Update activity
+            await updateUserActivity(existingUser.id);
+            
             if (!localStorage.getItem('user_data')) {
               toast.success('Welcome back!');
             }
+          } catch (error) {
+            console.error('Auth state handler error:', error);
+            toast.error('Authentication error');
+          } finally {
+            setIsLoading(false);
           }
-          setUser(existingUser);
-          setIsSignedIn(true);
-          localStorage.setItem('user_data', JSON.stringify(existingUser));
-          await updateUserActivity(existingUser.id);
-        } catch (e) {
-          console.error('Auth state handler error:', e);
-          toast.error('Authentication error');
-        } finally {
-          if (graceTimer) clearTimeout(graceTimer);
-          setIsLoading(false);
-        }
-      });
-      if (hasAuthCookie) {
-        graceTimer = setTimeout(() => {
-          if (!auth.currentUser) {
-            setIsSignedIn(false);
-            setUser(null);
-          }
-          setIsLoading(false);
-        }, 2000);
+        });
+      } catch (error) {
+        console.error('Auth initialization error:', error);
+        setIsLoading(false);
       }
-    });
+    };
+
+    initAuth();
+
     return () => {
-      if (unsub) unsub();
-      if (graceTimer) clearTimeout(graceTimer);
+      if (unsubscribe) unsubscribe();
     };
   }, []);
 
-  const getRecaptcha = () => {
-    if (typeof window === 'undefined') return null;
-    if (recaptchaRef.current) return recaptchaRef.current;
-    let container = document.getElementById('recaptcha-container');
-    if (!container) {
-      container = document.createElement('div');
-      container.id = 'recaptcha-container';
-      document.body.appendChild(container);
-    }
-    try {
-      recaptchaRef.current = new RecaptchaVerifier(auth, container, { size: 'invisible' });
-      return recaptchaRef.current;
-    } catch (e) {
-      console.error('Recaptcha init failed:', e);
-      return null;
-    }
-  };
-
-  // New API: signIn returns verificationId; legacy sendOTP wraps it (no return)
-  const signIn = async (phoneNumber: string): Promise<{ verificationId: string }> => {
+  const registerWithEmail = async (data: CreateUserData & { password: string }): Promise<void> => {
     try {
       setIsLoading(true);
-      const appVerifier = getRecaptcha();
-      if (!appVerifier) throw new Error('ReCAPTCHA failed to initialize');
-      const phoneRegex = /^\+\d{10,15}$/;
-      if (!phoneRegex.test(phoneNumber)) throw new Error('Invalid phone number format. Use +[countrycode][number]');
-      confirmationResultRef.current = await signInWithPhoneNumber(auth, phoneNumber, appVerifier);
-      toast.success('OTP sent');
-      return { verificationId: confirmationResultRef.current.verificationId };
-    } catch (e: unknown) {
-      const msg = typeof e === 'object' && e && 'message' in e ? (e as { message?: string }).message : undefined;
-      toast.error(msg || 'Failed to send OTP');
-      throw e;
+      
+      // Create Firebase Auth user first - Firebase Auth will handle duplicate email checking
+      const userCredential = await createUserWithEmailAndPassword(auth, data.email, data.password);
+      
+      // Create Firestore user document
+      const userData: CreateUserData = {
+        email: data.email,
+        phoneNumber: data.phoneNumber,
+        firstName: data.firstName,
+        lastName: data.lastName
+      };
+      
+      await createUserWithId(userCredential.user.uid, userData);
+      
+      // Send email verification
+      await sendEmailVerification(userCredential.user);
+      await markEmailVerificationSent(userCredential.user.uid);
+      
+      toast.success('Account created! Please check your email for verification.');
+    } catch (error: unknown) {
+      console.error('Registration error:', error);
+      const message = error && typeof error === 'object' && 'code' in error && error.code === 'auth/email-already-in-use' 
+        ? 'An account with this email already exists'
+        : (error && typeof error === 'object' && 'message' in error ? String(error.message) : 'Failed to create account');
+      toast.error(message);
+      throw error;
     } finally {
       setIsLoading(false);
     }
   };
 
-  const sendOTP = async (phoneNumber: string) => { await signIn(phoneNumber); };
-
-  // Flexible verifyOTP: verifyOTP(otp) OR verifyOTP(verificationId, otp)
-  const verifyOTP = async (...args: string[]) => {
-    const otp = args.length === 1 ? args[0] : args[1];
-    if (!otp) throw new Error('OTP required');
+  const signInWithEmail = async (email: string, password: string): Promise<void> => {
     try {
       setIsLoading(true);
-  if (!confirmationResultRef.current) throw new Error('No OTP in progress');
-  await confirmationResultRef.current.confirm(otp);
-      // Persist a simple cookie flag for faster optimistic auth on reload
-      try {
-        const expiryDays = 30;
-        const exp = new Date(Date.now() + expiryDays * 86400000).toUTCString();
-        document.cookie = `lp_authed=1; Expires=${exp}; Path=/; SameSite=Lax`;
-      } catch (cookieErr) {
-        console.warn('Failed to set auth cookie', cookieErr);
+      await signInWithEmailAndPassword(auth, email, password);
+      toast.success('Signed in successfully');
+    } catch (error: unknown) {
+      console.error('Sign in error:', error);
+      const message = error && typeof error === 'object' && 'code' in error && 
+        (error.code === 'auth/user-not-found' || error.code === 'auth/wrong-password')
+        ? 'Invalid email or password'
+        : (error && typeof error === 'object' && 'message' in error ? String(error.message) : 'Failed to sign in');
+      toast.error(message);
+      throw error;
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const signInWithGoogle = async (): Promise<void> => {
+    try {
+      setIsLoading(true);
+      const result = await signInWithPopup(auth, googleProvider);
+      
+      // Check if user exists in Firestore
+      let existingUser = await getUserById(result.user.uid);
+      
+      if (!existingUser) {
+        // Create new user from Google data
+        const userData: CreateUserData = {
+          email: result.user.email || '',
+          phoneNumber: '', // Will be filled during verification
+          firstName: result.user.displayName?.split(' ')[0] || '',
+          lastName: result.user.displayName?.split(' ').slice(1).join(' ') || ''
+        };
+        
+        existingUser = await createUserWithId(result.user.uid, userData);
+        
+        // Mark email as verified since it's from Google
+        if (result.user.emailVerified) {
+          await updateEmailVerification(result.user.uid, true);
+        }
+        
+        // Connect Google account
+        const googleData = {
+          accessToken: '', // You may need to get this from the credential
+          email: result.user.email || '',
+        };
+        await connectOAuthAccount(result.user.uid, 'google', googleData);
+        
+        toast.success('Account created with Google!');
+      } else {
+        toast.success('Signed in with Google!');
       }
-      toast.success('Phone verified');
-    } catch (e: unknown) {
-      const msg = typeof e === 'object' && e && 'message' in e ? (e as { message?: string }).message : undefined;
-      toast.error(msg || 'Invalid OTP');
-      throw e;
+    } catch (error: unknown) {
+      console.error('Google sign in error:', error);
+      const message = error && typeof error === 'object' && 'code' in error && error.code === 'auth/popup-closed-by-user'
+        ? 'Sign in was cancelled'
+        : (error && typeof error === 'object' && 'message' in error ? String(error.message) : 'Failed to sign in with Google');
+      toast.error(message);
+      throw error;
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const sendEmailVerificationLink = async (): Promise<void> => {
+    try {
+      if (!auth.currentUser) {
+        throw new Error('No user signed in');
+      }
+      
+      await sendEmailVerification(auth.currentUser);
+      await markEmailVerificationSent(auth.currentUser.uid);
+      toast.success('Verification email sent!');
+    } catch (error: unknown) {
+      console.error('Email verification error:', error);
+      toast.error('Failed to send verification email');
+      throw error;
+    }
+  };
+
+  const sendPhoneVerificationCode = async (phoneNumber: string): Promise<void> => {
+    try {
+      if (!auth.currentUser) {
+        throw new Error('No user signed in');
+      }
+
+      // Create recaptcha verifier
+      const recaptchaVerifier = new RecaptchaVerifier(auth, 'recaptcha-container', {
+        size: 'invisible'
+      });
+
+      const result = await signInWithPhoneNumber(auth, phoneNumber, recaptchaVerifier);
+      setConfirmationResult(result);
+      await markPhoneVerificationSent(auth.currentUser.uid);
+      toast.success('Verification code sent to your phone!');
+    } catch (error: unknown) {
+      console.error('Phone verification error:', error);
+      toast.error('Failed to send verification code');
+      throw error;
+    }
+  };
+
+  const verifyPhoneCode = async (code: string): Promise<void> => {
+    try {
+      if (!confirmationResult) {
+        throw new Error('No verification in progress');
+      }
+      
+      if (!auth.currentUser) {
+        throw new Error('No user signed in');
+      }
+
+      await confirmationResult.confirm(code);
+      await updatePhoneVerification(auth.currentUser.uid, true);
+      setConfirmationResult(null);
+      toast.success('Phone number verified!');
+    } catch (error: unknown) {
+      console.error('Phone code verification error:', error);
+      toast.error('Invalid verification code');
+      throw error;
     }
   };
 
   const signOut = async (): Promise<void> => {
     try {
       setIsLoading(true);
-      
       await firebaseSignOut(auth);
-      
-      // Clear local storage
-      localStorage.removeItem('auth_token');
-      localStorage.removeItem('user_data');
-      
-      // Reset state (will also be handled by auth state listener)
       setUser(null);
       setIsSignedIn(false);
-      
-      // Clear recaptcha verifier
-      if (recaptchaRef.current) {
-        try {
-          recaptchaRef.current.clear();
-        } catch {
-          // RecaptchaVerifier may already be cleared
-        }
-        recaptchaRef.current = null;
-      }
-      
-      // Clear confirmation result
-      confirmationResultRef.current = null;
-      
+      setConfirmationResult(null);
+      localStorage.removeItem('user_data');
       toast.success('Signed out successfully');
-      
     } catch (error) {
-      console.error('Sign out failed:', error);
+      console.error('Sign out error:', error);
       toast.error('Failed to sign out');
+      throw error;
     } finally {
       setIsLoading(false);
     }
   };
 
-  const linkLinkedin = async (): Promise<void> => {
-    if (!user) {
-      toast.error('Sign in first');
-      return;
-    }
+  const linkGoogleAccount = async (): Promise<void> => {
     try {
-      setIsLoading(true);
-      // Start OAuth flow via API (gets auth URL)
-      const startRes = await fetch('/api/auth/linkedin?action=start');
-      const startJson = await startRes.json();
-      if (!startRes.ok) throw new Error(startJson.error || 'Failed to start OAuth');
-      const authUrl: string = startJson.url;
-
-      const popup = window.open(authUrl, 'linkedin_oauth', 'width=600,height=700');
-      if (!popup) throw new Error('Popup blocked');
-
-      // Poll for redirect completion by monitoring window URL (simple approach)
-      await new Promise<void>((resolve, reject) => {
-        const interval = setInterval(async () => {
-          try {
-            if (popup.closed) {
-              clearInterval(interval);
-              reject(new Error('Popup closed'));
-              return;
-            }
-            const url = popup.location.href;
-            if (url.includes('/api/auth/linkedin/callback')) {
-              const search = popup.location.search;
-              const params = new URLSearchParams(search);
-              const code = params.get('code');
-              const error = params.get('error');
-              const errorDescription = params.get('error_description');
-              
-              if (error) {
-                popup.close();
-                clearInterval(interval);
-                reject(new Error(`LinkedIn OAuth error: ${error} - ${errorDescription || 'Unknown error'}`));
-                return;
-              }
-              
-              if (!code) {
-                popup.close();
-                clearInterval(interval);
-                reject(new Error('No authorization code returned from LinkedIn'));
-                return;
-              }
-
-              // Wait for the page to load completely and check for success/error content
-              try {
-                const checkContent = async () => {
-                  try {
-                    const bodyText = popup.document?.body?.textContent || '';
-                    
-                    // Check if page shows success
-                    if (bodyText.includes('"success":true') || bodyText.includes('"accessToken"')) {
-                      popup.close();
-                      clearInterval(interval);
-                      
-                      // Parse the response from the page
-                      try {
-                        const jsonMatch = bodyText.match(/\{.*\}/);
-                        if (jsonMatch) {
-                          const cbJson = JSON.parse(jsonMatch[0]);
-                          
-                          // Store LinkedIn tokens and profile data in Firestore
-                          try {
-                            await connectOAuthAccount(user.id, 'linkedin', {
-                              accessToken: cbJson.accessToken,
-                              refreshToken: cbJson.refreshToken,
-                              profileId: cbJson.profile?.sub,
-                              email: cbJson.profile?.email,
-                              expiresIn: cbJson.expiresIn,
-                              scope: cbJson.scope
-                            });
-                          } catch (firestoreError) {
-                            console.error('Failed to store LinkedIn data in Firestore:', firestoreError);
-                          }
-                          
-                          // Update user state
-                          const updated: User = {
-                            ...user,
-                            connectedAccounts: {
-                              ...user.connectedAccounts,
-                              linkedin: {
-                                connected: true,
-                                accessToken: cbJson.accessToken,
-                                profileId: cbJson.profile?.id,
-                                connectedAt: new Date()
-                              }
-                            }
-                          };
-                          setUser(updated);
-                          localStorage.setItem('user_data', JSON.stringify(updated));
-                          toast.success('LinkedIn connected');
-                          resolve();
-                          return;
-                        }
-                      } catch {
-                        // If parsing fails, still treat as success
-                        const updated: User = {
-                          ...user,
-                          connectedAccounts: {
-                            ...user.connectedAccounts,
-                            linkedin: {
-                              connected: true,
-                              connectedAt: new Date()
-                            }
-                          }
-                        };
-                        setUser(updated);
-                        localStorage.setItem('user_data', JSON.stringify(updated));
-                        toast.success('LinkedIn connected');
-                        resolve();
-                        return;
-                      }
-                    }
-                    
-                    // Check if page shows error
-                    if (bodyText.includes('"error"') || bodyText.includes('error')) {
-                      popup.close();
-                      clearInterval(interval);
-                      reject(new Error('LinkedIn OAuth failed'));
-                      return;
-                    }
-                  } catch {
-                    // Can't access popup content (CORS), wait for it to load more
-                  }
-                };
-                
-                // Check immediately and then poll
-                await checkContent();
-                setTimeout(() => checkContent(), 500);
-                setTimeout(() => checkContent(), 1000);
-                setTimeout(() => checkContent(), 2000);
-                
-              } catch {
-                popup.close();
-                clearInterval(interval);
-                reject(new Error('OAuth process failed'));
-              }
-            }
-          } catch {
-            // Ignore cross-origin until redirected back
-          }
-        }, 700);
-        // Safety timeout
-        setTimeout(() => {
-          clearInterval(interval);
-          try { popup.close(); } catch {}
-          reject(new Error('OAuth timeout'));
-        }, 1000 * 90);
-      });
-    } catch (error: unknown) {
-      console.error('LinkedIn connection failed:', error);
-      const msg = typeof error === 'object' && error && 'message' in error ? (error as { message?: string }).message : 'Failed to connect LinkedIn';
-  toast.error(msg || 'Failed to connect LinkedIn');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const linkGoogle = async (): Promise<void> => {
-    try {
-      setIsLoading(true);
-      
-      // Simulate Google OAuth flow
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      
-      if (user) {
-        const updatedUser: User = {
-          ...user,
-          connectedAccounts: {
-            ...user.connectedAccounts,
-            google: {
-              connected: true,
-              accessToken: 'mock_google_token',
-              email: 'user@gmail.com',
-              connectedAt: new Date()
-            }
-          }
-        };
-        
-        setUser(updatedUser);
-        localStorage.setItem('user_data', JSON.stringify(updatedUser));
-        toast.success('Google account connected!');
+      if (!auth.currentUser || !user) {
+        throw new Error('No user signed in');
       }
+
+      const result = await signInWithPopup(auth, googleProvider);
       
-    } catch (error) {
-      console.error('Google connection failed:', error);
-      toast.error('Failed to connect Google');
-    } finally {
-      setIsLoading(false);
+      const googleData = {
+        accessToken: '', // You may need to get this from the credential
+        email: result.user.email || '',
+      };
+      
+      await connectOAuthAccount(auth.currentUser.uid, 'google', googleData);
+      toast.success('Google account linked successfully!');
+    } catch (error: unknown) {
+      console.error('Google link error:', error);
+      toast.error('Failed to link Google account');
+      throw error;
     }
   };
 
   const updateUser = async (userData: Partial<User>): Promise<void> => {
-    try {
-      if (!user) return;
-      
-      const updatedUser = { ...user, ...userData };
-      setUser(updatedUser);
-      localStorage.setItem('user_data', JSON.stringify(updatedUser));
-      
-    } catch (error) {
-      console.error('User update failed:', error);
-      toast.error('Failed to update user');
-    }
+    // Implementation for updating user data
+    // This would call the updateUser function from users.ts
+    console.log('Update user:', userData);
+  };
+
+  const getAuthSteps = (): AuthStep[] => {
+    if (!user) return [];
+
+    return [
+      {
+        step: 'email-verification',
+        completed: user.verification.emailVerified
+      },
+      {
+        step: 'phone-verification',
+        completed: user.verification.phoneVerified
+      },
+      {
+        step: 'google-connection',
+        completed: user.connectedAccounts.google?.connected || false
+      },
+      {
+        step: 'complete',
+        completed: user.verification.emailVerified && 
+                  user.verification.phoneVerified && 
+                  (user.connectedAccounts.google?.connected || false)
+      }
+    ];
   };
 
   const value: AuthContextType = {
@@ -440,18 +384,22 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     isLoading,
     isSignedIn,
     isAuthenticated: isSignedIn,
-    signIn,
-    sendOTP,
-    verifyOTP,
+    registerWithEmail,
+    signInWithEmail,
+    signInWithGoogle,
+    sendEmailVerificationLink,
+    sendPhoneVerificationCode,
+    verifyPhoneCode,
     signOut,
-    linkLinkedin,
-    linkGoogle,
-    updateUser
+    linkGoogleAccount,
+    updateUser,
+    getAuthSteps
   };
 
   return (
     <AuthContext.Provider value={value}>
       {children}
+      <div id="recaptcha-container" className="hidden"></div>
     </AuthContext.Provider>
   );
 };

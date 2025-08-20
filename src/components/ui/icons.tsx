@@ -44,6 +44,13 @@ export const Icons = {
     </svg>
   ),
 
+  Mail: ({ size = 24, className = '', color = 'currentColor' }: IconProps) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" className={className}>
+      <rect x="2" y="4" width="20" height="16" rx="2" stroke={color} strokeWidth="2"/>
+      <path stroke={color} strokeWidth="2" strokeLinecap="round" d="m22 7-10 5L2 7"/>
+    </svg>
+  ),
+
   Shield: ({ size = 24, className = '', color = 'currentColor' }: IconProps) => (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" className={className}>
       <path stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />

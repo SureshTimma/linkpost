@@ -25,31 +25,23 @@ export async function createUser(userData: CreateUserData): Promise<User> {
 
 // Create a new user document with a provided ID (e.g. Firebase Auth UID)
 export async function createUserWithId(userId: string, userData: CreateUserData): Promise<User> {
-  // Check if user with this ID already exists (shouldn't happen, but safety check)
-  const existingById = await getUserById(userId);
-  if (existingById) {
-    throw new Error('User with this ID already exists');
-  }
-  
-  // Check if user with this phone number already exists
-  const existingByPhone = await getUserByPhoneNumber(userData.phoneNumber);
-  if (existingByPhone) {
-    throw new Error('User with this phone number already exists');
-  }
-  
   const now = new Date();
   
   const newUser: User = {
     id: userId,
+    email: userData.email,
     phoneNumber: userData.phoneNumber,
     createdAt: now,
     lastLoginAt: now,
     updatedAt: now,
     profile: {
-      firstName: userData.firstName || '',
-      lastName: userData.lastName || '',
-      email: userData.email || '',
+      firstName: userData.firstName,
+      lastName: userData.lastName,
       profilePicture: ''
+    },
+    verification: {
+      emailVerified: false,
+      phoneVerified: false
     },
     subscription: {
       plan: 'free',
@@ -95,6 +87,23 @@ export async function createUserWithId(userId: string, userData: CreateUserData)
   return newUser;
 }
 
+// Create user with duplicate checking (for special cases)
+export async function createUserWithIdAndCheck(userId: string, userData: CreateUserData): Promise<User> {
+  // Check if user with this ID already exists (shouldn't happen, but safety check)
+  const existingById = await getUserById(userId);
+  if (existingById) {
+    throw new Error('User with this ID already exists');
+  }
+  
+  // Check if user with this email already exists
+  const existingByEmail = await getUserByEmail(userData.email);
+  if (existingByEmail) {
+    throw new Error('User with this email already exists');
+  }
+  
+  return createUserWithId(userId, userData);
+}
+
 // Get user by ID
 export async function getUserById(userId: string): Promise<User | null> {
   try {
@@ -120,7 +129,40 @@ export async function getUserById(userId: string): Promise<User | null> {
   }
 }
 
-// Get user by phone number
+// Get user by email
+export async function getUserByEmail(email: string): Promise<User | null> {
+  try {
+    const q = query(
+      collection(db, USERS_COLLECTION),
+      where('email', '==', email)
+    );
+    
+    const querySnapshot = await getDocs(q);
+    
+    if (querySnapshot.empty) {
+      return null;
+    }
+
+    const userDoc = querySnapshot.docs[0];
+    const data = userDoc.data();
+    
+    const user = {
+      ...data,
+      id: userDoc.id,
+      createdAt: data.createdAt?.toDate() || new Date(),
+      lastLoginAt: data.lastLoginAt?.toDate() || new Date(),
+      updatedAt: data.updatedAt?.toDate() || new Date(),
+      lastActiveAt: data.lastActiveAt?.toDate() || new Date(),
+    } as User;
+    
+    return user;
+  } catch (error) {
+    console.error('Error getting user by email:', error);
+    return null;
+  }
+}
+
+// Get user by phone number (legacy support)
 export async function getUserByPhoneNumber(phoneNumber: string): Promise<User | null> {
   try {
     const q = query(
@@ -321,4 +363,58 @@ export function getRemainingPosts(user: User): number {
   }
   
   return Math.max(0, user.subscription.postsLimit - user.subscription.postsUsed);
+}
+
+// Update email verification status
+export async function updateEmailVerification(userId: string, verified: boolean): Promise<void> {
+  try {
+    await updateDoc(doc(db, USERS_COLLECTION, userId), {
+      'verification.emailVerified': verified,
+      'verification.emailVerificationSentAt': verified ? null : serverTimestamp(),
+      updatedAt: serverTimestamp()
+    });
+  } catch (error) {
+    console.error('Error updating email verification:', error);
+    throw error;
+  }
+}
+
+// Update phone verification status
+export async function updatePhoneVerification(userId: string, verified: boolean): Promise<void> {
+  try {
+    await updateDoc(doc(db, USERS_COLLECTION, userId), {
+      'verification.phoneVerified': verified,
+      'verification.phoneVerificationSentAt': verified ? null : serverTimestamp(),
+      updatedAt: serverTimestamp()
+    });
+  } catch (error) {
+    console.error('Error updating phone verification:', error);
+    throw error;
+  }
+}
+
+// Mark email verification as sent
+export async function markEmailVerificationSent(userId: string): Promise<void> {
+  try {
+    await updateDoc(doc(db, USERS_COLLECTION, userId), {
+      'verification.emailVerificationSentAt': serverTimestamp(),
+      updatedAt: serverTimestamp()
+    });
+  } catch (error) {
+    console.error('Error marking email verification sent:', error);
+    throw error;
+  }
+}
+
+// Mark phone verification as sent
+export async function markPhoneVerificationSent(userId: string): Promise<void> {
+  try {
+    await updateDoc(doc(db, USERS_COLLECTION, userId), {
+      'verification.phoneVerificationSentAt': serverTimestamp(),
+      updatedAt: serverTimestamp()
+    });
+  } catch (error) {
+    console.error('Error marking phone verification sent:', error);
+    throw error;
+  }
 }
