@@ -14,10 +14,19 @@ const NewDashboardPage: React.FC = () => {
   const router = useRouter();
 
   useEffect(() => {
-    if (!isLoading && !isSignedIn) {
-      router.replace('/auth');
+    // Only redirect if auth is definitely not loading and user is not signed in
+    // Add a slight delay to handle race conditions between auth state changes
+    if (!isLoading && !isSignedIn && !user) {
+      const timeoutId = setTimeout(() => {
+        // Double-check the state hasn't changed during the timeout
+        if (!isSignedIn && !user) {
+          router.replace('/auth');
+        }
+      }, 200);
+      
+      return () => clearTimeout(timeoutId);
     }
-  }, [isLoading, isSignedIn, router]);
+  }, [isLoading, isSignedIn, user, router]);
 
   const handleSignOut = async () => {
     try {

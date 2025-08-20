@@ -275,6 +275,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         // Mark email as verified since it's from Google
         if (result.user.emailVerified) {
           await updateEmailVerification(result.user.uid, true);
+          existingUser.verification.emailVerified = true;
         }
         
         // Connect Google account
@@ -284,10 +285,25 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         };
         await connectOAuthAccount(result.user.uid, 'google', googleData);
         
+        // Update the connected accounts in the user object
+        existingUser.connectedAccounts.google = {
+          connected: true,
+          email: result.user.email || '',
+          connectedAt: new Date()
+        };
+        
         toast.success('Account created with Google!');
       } else {
+        // Update login timestamp for existing user
+        await updateUserLogin(existingUser.id);
         toast.success('Signed in with Google!');
       }
+      
+      // Immediately update the auth state to prevent redirect
+      setUser(existingUser);
+      setIsSignedIn(true);
+      localStorage.setItem('user_data', JSON.stringify(existingUser));
+      
     } catch (error: unknown) {
       console.error('Google sign in error:', error);
       const message = error && typeof error === 'object' && 'code' in error && error.code === 'auth/popup-closed-by-user'
@@ -550,7 +566,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
       // Listen for the OAuth callback response
       const result = await new Promise<{
-        access_token: string;
+        accessToken: string;
         profile: { id: string; email?: string; [key: string]: unknown };
         refreshToken?: string;
         email?: string;
@@ -574,8 +590,9 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
           popup.close();
 
           if (event.data.error) {
-            reject(new Error(event.data.description || event.data.error));
+            reject(new Error(event.data.description || event.data.message || event.data.error));
           } else if (event.data.success) {
+            console.log('LinkedIn OAuth success data:', event.data);
             resolve(event.data);
           }
         };
@@ -585,7 +602,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
       // Save LinkedIn data to Firestore
       const linkedinData = {
-        accessToken: result.access_token,
+        accessToken: result.accessToken,
         refreshToken: result.refreshToken || '',
         profileId: result.profile?.id || '',
         email: result.email || result.profile?.email || '',
@@ -593,13 +610,32 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         expiresIn: result.expiresIn || 0
       };
       
+      console.log('Saving LinkedIn data:', linkedinData);
+      console.log('User ID:', auth.currentUser.uid);
+      
+      // Ensure user document exists before connecting LinkedIn
+      let userDoc = await getUserById(auth.currentUser.uid);
+      if (!userDoc) {
+        console.log('User document not found, creating one...');
+        // Create user document if it doesn't exist
+        const tempUserData = JSON.parse(localStorage.getItem('temp_user_data') || '{}');
+        userDoc = await createUserWithId(auth.currentUser.uid, {
+          email: auth.currentUser.email || tempUserData.email || '',
+          firstName: tempUserData.firstName || 'User',
+          lastName: tempUserData.lastName || '',
+          phoneNumber: tempUserData.phoneNumber || ''
+        });
+        console.log('User document created:', userDoc);
+      }
+      
       await connectOAuthAccount(auth.currentUser.uid, 'linkedin', linkedinData);
+      console.log('LinkedIn data saved successfully');
 
       // Update local user state
       const updatedUser = { ...user };
       updatedUser.connectedAccounts.linkedin = {
         connected: true,
-        accessToken: result.access_token,
+        accessToken: result.accessToken,
         refreshToken: result.refreshToken || '',
         profileId: result.profile?.id || '',
         connectedAt: new Date()

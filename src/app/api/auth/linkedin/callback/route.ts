@@ -85,9 +85,9 @@ export async function GET(req: NextRequest) {
         <body>
           <script>
             window.postMessage(${JSON.stringify(responseData)}, "*");
+            window.close();
           </script>
           <div id="result">${JSON.stringify(responseData)}</div>
-          <p>LinkedIn connected successfully! You can close this window.</p>
         </body>
       </html>
     `, {
