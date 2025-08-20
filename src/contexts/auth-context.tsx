@@ -61,6 +61,7 @@ interface AuthContextType extends AuthState {
   linkGoogleAccount: () => Promise<void>;
   linkLinkedin: () => Promise<void>;
   updateUser: (userData: Partial<User>) => Promise<void>;
+  refreshUserData: () => Promise<void>;
   
   // Verification status
   getAuthSteps: () => AuthStep[];
@@ -94,15 +95,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       try {
         await setPersistence(auth, browserLocalPersistence);
         
-        // Check for cached user data
-        try {
-          const cached = localStorage.getItem('user_data');
-          if (cached) {
-            const parsed = JSON.parse(cached);
-            setUser(parsed);
-            setIsSignedIn(true);
-          }
-        } catch {}
+        // Note: We don't load cached user data here anymore
+        // We always fetch fresh data from the database to ensure verification status is current
 
         unsubscribe = onAuthStateChanged(auth, async (firebaseUser: FirebaseUser | null) => {
           if (!firebaseUser) {
@@ -193,6 +187,39 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     };
   }, []);
 
+  // Periodic user data refresh to ensure verification status stays current
+  // useEffect(() => {
+  //   let refreshInterval: NodeJS.Timeout;
+
+  //   if (isSignedIn && user) {
+  //     // Refresh user data every 30 seconds to catch any database changes
+  //     refreshInterval = setInterval(async () => {
+  //       try {
+  //         if (auth.currentUser) {
+  //           const freshUserData = await getUserById(auth.currentUser.uid);
+  //           if (freshUserData) {
+  //             // Only update if there are actual changes to avoid unnecessary re-renders
+  //             const currentUserString = JSON.stringify(user);
+  //             const freshUserString = JSON.stringify(freshUserData);
+  //             if (currentUserString !== freshUserString) {
+  //               setUser(freshUserData);
+  //               localStorage.setItem('user_data', JSON.stringify(freshUserData));
+  //             }
+  //           }
+  //         }
+  //       } catch (error) {
+  //         console.error('Error during periodic user data refresh:', error);
+  //       }
+  //     }, 30000); // 30 seconds
+  //   }
+
+  //   return () => {
+  //     if (refreshInterval) {
+  //       clearInterval(refreshInterval);
+  //     }
+  //   };
+  // }, [isSignedIn, user]);
+
   const registerWithEmail = async (data: CreateUserData & { password: string }): Promise<void> => {
     try {
       setIsLoading(true);
@@ -275,7 +302,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         // Mark email as verified since it's from Google
         if (result.user.emailVerified) {
           await updateEmailVerification(result.user.uid, true);
-          existingUser.verification.emailVerified = true;
         }
         
         // Connect Google account
@@ -285,12 +311,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         };
         await connectOAuthAccount(result.user.uid, 'google', googleData);
         
-        // Update the connected accounts in the user object
-        existingUser.connectedAccounts.google = {
-          connected: true,
-          email: result.user.email || '',
-          connectedAt: new Date()
-        };
+        // Re-fetch user to get the updated state
+        existingUser = await getUserById(result.user.uid);
         
         toast.success('Account created with Google!');
       } else {
@@ -348,11 +370,12 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         // Update Firestore and local state
         await updateEmailVerification(auth.currentUser.uid, true);
         
-        // Update local user state
-        const updatedUser = { ...user };
-        updatedUser.verification.emailVerified = true;
-        setUser(updatedUser);
-        localStorage.setItem('user_data', JSON.stringify(updatedUser));
+        // Re-fetch to confirm persistence (source of truth)
+        const refreshed = await getUserById(auth.currentUser.uid);
+        if (refreshed) {
+          setUser(refreshed);
+          localStorage.setItem('user_data', JSON.stringify(refreshed));
+        }
         
         toast.success('Email verified successfully!');
       }
@@ -443,17 +466,14 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       // Mark phone as verified in Firestore
       await updatePhoneVerification(auth.currentUser.uid, true);
       
-      // Update local state to mark phone as verified
-      const updatedUser = { 
-        ...user, 
-        verification: {
-          ...user.verification,
-          phoneVerified: true
-        }
-      };
+      // Re-fetch to confirm persistence (source of truth)
+      const refreshed = await getUserById(auth.currentUser.uid);
+      if (!refreshed?.verification.phoneVerified) {
+        throw new Error('Phone verification failed to persist');
+      }
       
-      setUser(updatedUser);
-      localStorage.setItem('user_data', JSON.stringify(updatedUser));
+      setUser(refreshed);
+      localStorage.setItem('user_data', JSON.stringify(refreshed));
       
       // Clear confirmation result
       setConfirmationResult(null);
@@ -517,17 +537,14 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       
       await connectOAuthAccount(auth.currentUser.uid, 'google', googleData);
       
-      // Update local user state to reflect Google connection
-      if (user) {
-        const updatedUser = { ...user };
-        updatedUser.connectedAccounts.google = {
-          connected: true,
-          email: result.user.email || '',
-          connectedAt: new Date()
-        };
-        setUser(updatedUser);
-        localStorage.setItem('user_data', JSON.stringify(updatedUser));
+      // Re-fetch to confirm persistence (source of truth)
+      const refreshed = await getUserById(auth.currentUser.uid);
+      if (!refreshed?.connectedAccounts.google?.connected) {
+        throw new Error('Google connection failed to persist');
       }
+
+      setUser(refreshed);
+      localStorage.setItem('user_data', JSON.stringify(refreshed));
       
       toast.success('Google account linked successfully!');
     } catch (error: unknown) {
@@ -600,17 +617,42 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         const messageHandler = (event: MessageEvent) => {
           if (event.origin !== window.location.origin) return;
           if (settled) return;
+          
+          // Filter out React DevTools and other development tool messages
+          if (event.data?.source === 'react-devtools-bridge' || 
+              event.data?.source === 'react-devtools-content-script' ||
+              event.data?.source === 'react-devtools-inject-script') {
+            return;
+          }
+          
+          // Only process messages that look like LinkedIn OAuth responses
+          if (!event.data || typeof event.data !== 'object') {
+            return;
+          }
+          
+          // Check if this is a LinkedIn OAuth response (has error or success/accessToken)
+          const isLinkedInResponse = event.data.error || event.data.success || event.data.accessToken;
+          if (!isLinkedInResponse) {
+            console.log('Ignoring non-LinkedIn message:', event.data);
+            return;
+          }
+          
+          console.log('LinkedIn OAuth response received:', event.data);
+          
           settled = true;
           clearInterval(checkClosed);
           clearTimeout(timeout);
           window.removeEventListener('message', messageHandler);
           try { popup.close(); } catch {}
-          if (event.data?.error) {
+          
+          if (event.data.error) {
             reject(new Error(event.data.description || event.data.message || event.data.error));
-          } else if (event.data?.success) {
+          } else if (event.data.success || event.data.accessToken) {
+            // Accept response if it has success flag OR accessToken (fallback)
             resolve(event.data);
           } else {
-            reject(new Error('Unexpected LinkedIn response'));
+            console.error('Unexpected LinkedIn response structure:', event.data);
+            reject(new Error('Unexpected LinkedIn response: ' + JSON.stringify(event.data)));
           }
         };
         window.addEventListener('message', messageHandler, { once: false });
@@ -668,6 +710,28 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     console.log('Update user:', userData);
   };
 
+  const refreshUserData = async (): Promise<void> => {
+    try {
+      if (!auth.currentUser) {
+        throw new Error('No user signed in');
+      }
+
+      // Fetch fresh user data from database
+      const freshUserData = await getUserById(auth.currentUser.uid);
+      if (freshUserData) {
+        setUser(freshUserData);
+        localStorage.setItem('user_data', JSON.stringify(freshUserData));
+      } else {
+        // If user doesn't exist in database, sign them out
+        console.warn('User data not found in database, signing out');
+        await signOut();
+      }
+    } catch (error) {
+      console.error('Error refreshing user data:', error);
+      throw error;
+    }
+  };
+
   const getAuthSteps = (): AuthStep[] => {
     if (!user) return [];
 
@@ -714,6 +778,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     linkGoogleAccount,
     linkLinkedin,
     updateUser,
+    refreshUserData,
     getAuthSteps
   };
 

@@ -1,12 +1,18 @@
-'use client';
+"use client";
 
-import React, { useState } from 'react';
-import { useForm } from 'react-hook-form';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
-import { Icons } from '@/components/ui/icons';
-import { useAuth } from '@/contexts/auth-context';
+import React, { useState } from "react";
+import { useForm } from "react-hook-form";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Card,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+  CardContent,
+} from "@/components/ui/card";
+import { Icons } from "@/components/ui/icons";
+import { useAuth } from "@/contexts/auth-context";
 
 interface PhoneVerificationForm {
   phoneNumber: string;
@@ -14,83 +20,111 @@ interface PhoneVerificationForm {
 }
 
 const VerificationSteps: React.FC = () => {
-  const [currentStep, setCurrentStep] = useState<'email' | 'phone' | 'google' | 'linkedin' | 'complete'>('email');
+  const [currentStep, setCurrentStep] = useState<
+    "email" | "phone" | "google" | "linkedin" | "complete"
+  >("email");
   const [isEditingPhone, setIsEditingPhone] = useState(false);
   const [otpSent, setOtpSent] = useState(false);
   const [emailSentTime, setEmailSentTime] = useState<number | null>(null);
   const [cooldownRemaining, setCooldownRemaining] = useState(0);
-  
-  const { 
-    user, 
-    sendEmailVerificationLink, 
+
+  const {
+    user,
+    sendEmailVerificationLink,
     checkEmailVerificationStatus,
     sendPhoneVerificationCode,
     verifyPhoneCode,
     linkGoogleAccount,
     linkLinkedin,
     getAuthSteps,
-    isLoading 
+    refreshUserData,
+    isLoading,
   } = useAuth();
-  
+
   const phoneForm = useForm<PhoneVerificationForm>();
-  
+
   const authSteps = getAuthSteps();
 
   // Cooldown timer effect
   React.useEffect(() => {
     let interval: NodeJS.Timeout;
-    
+
     if (emailSentTime && cooldownRemaining > 0) {
       interval = setInterval(() => {
         const elapsed = Math.floor((Date.now() - emailSentTime) / 1000);
         const remaining = Math.max(0, 60 - elapsed);
         setCooldownRemaining(remaining);
-        
+
         if (remaining === 0) {
           setEmailSentTime(null);
         }
       }, 1000);
     }
-    
+
     return () => {
       if (interval) clearInterval(interval);
     };
   }, [emailSentTime, cooldownRemaining]);
 
+  // Refresh user data on component mount to ensure verification status is current
+  React.useEffect(() => {
+    const refreshData = async () => {
+      if (user) {
+        try {
+          await refreshUserData();
+        } catch (error) {
+          console.error('Failed to refresh user data in verification steps:', error);
+        }
+      }
+    };
+
+    refreshData();
+  }, [user, refreshUserData]);
+
   // Determine current step based on completion status
   React.useEffect(() => {
-    const emailCompleted = authSteps.find(s => s.step === 'email-verification')?.completed;
-    const phoneCompleted = authSteps.find(s => s.step === 'phone-verification')?.completed;
-    const googleCompleted = authSteps.find(s => s.step === 'google-connection')?.completed;
-    const linkedinCompleted = authSteps.find(s => s.step === 'linkedin-connection')?.completed;
-    
+    const emailCompleted = authSteps.find(
+      (s) => s.step === "email-verification"
+    )?.completed;
+    const phoneCompleted = authSteps.find(
+      (s) => s.step === "phone-verification"
+    )?.completed;
+    const googleCompleted = authSteps.find(
+      (s) => s.step === "google-connection"
+    )?.completed;
+    const linkedinCompleted = authSteps.find(
+      (s) => s.step === "linkedin-connection"
+    )?.completed;
+
     if (!emailCompleted) {
-      setCurrentStep('email');
+      setCurrentStep("email");
     } else if (!phoneCompleted) {
-      setCurrentStep('phone');
+      setCurrentStep("phone");
     } else if (!googleCompleted) {
-      setCurrentStep('google');
+      setCurrentStep("google");
     } else if (!linkedinCompleted) {
-      setCurrentStep('linkedin');
+      setCurrentStep("linkedin");
     } else {
-      setCurrentStep('complete');
+      setCurrentStep("complete");
     }
   }, [authSteps]);
 
   // Initialize email sent time if user already has verification email sent
   React.useEffect(() => {
     if (user?.verification?.emailVerificationSentAt && !emailSentTime) {
-      const sentTime = new Date(user.verification.emailVerificationSentAt).getTime();
+      const sentTime = new Date(
+        user.verification.emailVerificationSentAt
+      ).getTime();
       const now = Date.now();
       const elapsed = Math.floor((now - sentTime) / 1000);
-      
+
       if (elapsed < 60) {
         setEmailSentTime(sentTime);
         setCooldownRemaining(60 - elapsed);
       }
     }
   }, [user?.verification?.emailVerificationSentAt, emailSentTime]);
-  
+
   if (!user) return null;
 
   const handleSendEmailVerification = async () => {
@@ -107,6 +141,8 @@ const VerificationSteps: React.FC = () => {
   const handleCheckEmailStatus = async () => {
     try {
       await checkEmailVerificationStatus();
+      // Refresh user data to ensure we have the latest verification status
+      await refreshUserData();
     } catch {
       // Error handled by auth context
     }
@@ -126,6 +162,8 @@ const VerificationSteps: React.FC = () => {
     try {
       await verifyPhoneCode(data.otpCode);
       setOtpSent(false);
+      // Refresh user data to ensure we have the latest verification status
+      await refreshUserData();
     } catch {
       // Error handled by auth context
     }
@@ -134,6 +172,8 @@ const VerificationSteps: React.FC = () => {
   const handleLinkGoogle = async () => {
     try {
       await linkGoogleAccount();
+      // Refresh user data to ensure we have the latest verification status
+      await refreshUserData();
     } catch {
       // Error handled by auth context
     }
@@ -142,6 +182,8 @@ const VerificationSteps: React.FC = () => {
   const handleLinkLinkedin = async () => {
     try {
       await linkLinkedin();
+      // Refresh user data to ensure we have the latest verification status
+      await refreshUserData();
     } catch {
       // Error handled by auth context
     }
@@ -149,33 +191,53 @@ const VerificationSteps: React.FC = () => {
 
   const renderStepIndicator = () => {
     const steps = [
-      { key: 'email', label: 'Email', completed: authSteps.find(s => s.step === 'email-verification')?.completed },
-      { key: 'phone', label: 'Phone', completed: authSteps.find(s => s.step === 'phone-verification')?.completed },
-      { key: 'google', label: 'Google', completed: authSteps.find(s => s.step === 'google-connection')?.completed },
-      { key: 'linkedin', label: 'LinkedIn', completed: authSteps.find(s => s.step === 'linkedin-connection')?.completed },
+      {
+        key: "email",
+        label: "Email",
+        completed: authSteps.find((s) => s.step === "email-verification")
+          ?.completed,
+      },
+      {
+        key: "phone",
+        label: "Phone",
+        completed: authSteps.find((s) => s.step === "phone-verification")
+          ?.completed,
+      },
+      {
+        key: "google",
+        label: "Google",
+        completed: authSteps.find((s) => s.step === "google-connection")
+          ?.completed,
+      },
+      {
+        key: "linkedin",
+        label: "LinkedIn",
+        completed: authSteps.find((s) => s.step === "linkedin-connection")
+          ?.completed,
+      },
     ];
 
     return (
       <div className="flex items-center justify-center space-x-4 mb-8">
         {steps.map((step, index) => (
           <React.Fragment key={step.key}>
-            <div className={`flex items-center justify-center w-8 h-8 rounded-full text-sm font-medium ${
-              step.completed 
-                ? 'bg-green-500 text-white' 
-                : currentStep === step.key 
-                ? 'bg-blue-500 text-white' 
-                : 'bg-gray-300 text-gray-600'
-            }`}>
-              {step.completed ? (
-                <Icons.Check size={16} />
-              ) : (
-                index + 1
-              )}
+            <div
+              className={`flex items-center justify-center w-8 h-8 rounded-full text-sm font-medium ${
+                step.completed
+                  ? "bg-green-500 text-white"
+                  : currentStep === step.key
+                  ? "bg-blue-500 text-white"
+                  : "bg-gray-300 text-gray-600"
+              }`}
+            >
+              {step.completed ? <Icons.Check size={16} /> : index + 1}
             </div>
             {index < steps.length - 1 && (
-              <div className={`flex-1 h-px ${
-                steps[index + 1].completed ? 'bg-green-500' : 'bg-gray-300'
-              }`} />
+              <div
+                className={`flex-1 h-px ${
+                  steps[index + 1].completed ? "bg-green-500" : "bg-gray-300"
+                }`}
+              />
             )}
           </React.Fragment>
         ))}
@@ -183,7 +245,7 @@ const VerificationSteps: React.FC = () => {
     );
   };
 
-  if (currentStep === 'complete') {
+  if (currentStep === "complete") {
     return (
       <Card className="w-full max-w-md mx-auto">
         <CardHeader className="text-center">
@@ -202,9 +264,9 @@ const VerificationSteps: React.FC = () => {
   return (
     <div className="w-full max-w-md mx-auto space-y-6">
       {renderStepIndicator()}
-      
+
       {/* Email Verification Step */}
-      {currentStep === 'email' && (
+      {currentStep === "email" && (
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center">
@@ -218,13 +280,12 @@ const VerificationSteps: React.FC = () => {
           <CardContent>
             <div className="space-y-4">
               <p className="text-sm text-gray-600">
-                {emailSentTime 
+                {emailSentTime
                   ? "Verification email sent! Check your inbox and spam folder."
-                  : "Click the button below to send a verification email to your inbox."
-                }
+                  : "Click the button below to send a verification email to your inbox."}
               </p>
               <div className="flex space-x-2">
-                <Button 
+                <Button
                   onClick={handleSendEmailVerification}
                   disabled={isLoading || cooldownRemaining > 0}
                   variant="outline"
@@ -252,7 +313,7 @@ const VerificationSteps: React.FC = () => {
                     </>
                   )}
                 </Button>
-                <Button 
+                <Button
                   onClick={handleCheckEmailStatus}
                   disabled={isLoading}
                   className="flex-1"
@@ -271,7 +332,8 @@ const VerificationSteps: React.FC = () => {
                 </Button>
               </div>
               <p className="text-xs text-gray-500">
-                After clicking the link in your email, click &quot;Check Status&quot; to verify.
+                After clicking the link in your email, click &quot;Check
+                Status&quot; to verify.
                 {emailSentTime && (
                   <span className="block mt-1 text-green-600">
                     ✓ Verification email sent to {user.email}
@@ -284,7 +346,7 @@ const VerificationSteps: React.FC = () => {
       )}
 
       {/* Phone Verification Step */}
-      {currentStep === 'phone' && (
+      {currentStep === "phone" && (
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center">
@@ -292,14 +354,13 @@ const VerificationSteps: React.FC = () => {
               Verify Your Phone
             </CardTitle>
             <CardDescription>
-              {user.verification.phoneVerified 
-                ? "Your phone number is verified" 
-                : otpSent 
-                ? "Enter the 6-digit OTP sent to your phone" 
-                : isEditingPhone 
+              {user.verification.phoneVerified
+                ? "Your phone number is verified"
+                : otpSent
+                ? "Enter the 6-digit OTP sent to your phone"
+                : isEditingPhone
                 ? "Update your phone number below"
-                : "Add and verify your phone number for enhanced security"
-              }
+                : "Add and verify your phone number for enhanced security"}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -324,19 +385,23 @@ const VerificationSteps: React.FC = () => {
                   </Button>
                 </div>
                 <p className="text-sm text-green-600">
-                  ✓ Your phone number has been verified and saved to your account.
+                  ✓ Your phone number has been verified and saved to your
+                  account.
                 </p>
               </div>
             ) : otpSent ? (
-              <form onSubmit={phoneForm.handleSubmit(handleVerifyOtpCode)} className="space-y-4">
+              <form
+                onSubmit={phoneForm.handleSubmit(handleVerifyOtpCode)}
+                className="space-y-4"
+              >
                 <div>
                   <Input
-                    {...phoneForm.register('otpCode', { 
-                      required: 'OTP code is required',
+                    {...phoneForm.register("otpCode", {
+                      required: "OTP code is required",
                       pattern: {
                         value: /^\d{6}$/,
-                        message: 'OTP must be 6 digits'
-                      }
+                        message: "OTP must be 6 digits",
+                      },
                     })}
                     placeholder="Enter 6-digit OTP"
                     maxLength={6}
@@ -363,9 +428,9 @@ const VerificationSteps: React.FC = () => {
                       </>
                     )}
                   </Button>
-                  <Button 
-                    type="button" 
-                    variant="outline" 
+                  <Button
+                    type="button"
+                    variant="outline"
                     onClick={() => setOtpSent(false)}
                     disabled={isLoading}
                   >
@@ -373,13 +438,15 @@ const VerificationSteps: React.FC = () => {
                   </Button>
                 </div>
                 <p className="text-sm text-gray-600 text-center">
-                  Didn&apos;t receive the code? Check your messages or try again.
+                  Didn&apos;t receive the code? Check your messages or try
+                  again.
                 </p>
               </form>
             ) : !isEditingPhone && !user.phoneNumber ? (
               <div className="space-y-4">
                 <p className="text-sm text-gray-600">
-                  Add your phone number to receive important notifications and enhance account security.
+                  Add your phone number to receive important notifications and
+                  enhance account security.
                 </p>
                 <Button
                   onClick={() => setIsEditingPhone(true)}
@@ -395,7 +462,9 @@ const VerificationSteps: React.FC = () => {
                   <div className="flex items-center">
                     <Icons.Phone size={20} className="mr-3 text-gray-600" />
                     <span className="font-medium">{user.phoneNumber}</span>
-                    <span className="ml-2 text-sm text-orange-600">(Not verified)</span>
+                    <span className="ml-2 text-sm text-orange-600">
+                      (Not verified)
+                    </span>
                   </div>
                   <Button
                     variant="outline"
@@ -409,8 +478,11 @@ const VerificationSteps: React.FC = () => {
                 </div>
                 <Button
                   onClick={() => {
-                    phoneForm.setValue('phoneNumber', user.phoneNumber);
-                    handleSendPhoneCode({ phoneNumber: user.phoneNumber, otpCode: '' });
+                    phoneForm.setValue("phoneNumber", user.phoneNumber);
+                    handleSendPhoneCode({
+                      phoneNumber: user.phoneNumber,
+                      otpCode: "",
+                    });
                   }}
                   disabled={isLoading}
                   className="w-full"
@@ -429,15 +501,18 @@ const VerificationSteps: React.FC = () => {
                 </Button>
               </div>
             ) : (
-              <form onSubmit={phoneForm.handleSubmit(handleSendPhoneCode)} className="space-y-4">
+              <form
+                onSubmit={phoneForm.handleSubmit(handleSendPhoneCode)}
+                className="space-y-4"
+              >
                 <div>
                   <Input
-                    {...phoneForm.register('phoneNumber', { 
-                      required: 'Phone number is required',
+                    {...phoneForm.register("phoneNumber", {
+                      required: "Phone number is required",
                       pattern: {
                         value: /^\+\d{10,15}$/,
-                        message: 'Phone number must be in format +1234567890'
-                      }
+                        message: "Phone number must be in format +1234567890",
+                      },
                     })}
                     placeholder="Phone Number (+1234567890)"
                     defaultValue={user.phoneNumber}
@@ -463,9 +538,9 @@ const VerificationSteps: React.FC = () => {
                       </>
                     )}
                   </Button>
-                  <Button 
-                    type="button" 
-                    variant="outline" 
+                  <Button
+                    type="button"
+                    variant="outline"
                     onClick={() => setIsEditingPhone(false)}
                     disabled={isLoading}
                   >
@@ -484,7 +559,7 @@ const VerificationSteps: React.FC = () => {
       )}
 
       {/* Google Connection Step */}
-      {currentStep === 'google' && (
+      {currentStep === "google" && (
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center">
@@ -492,7 +567,7 @@ const VerificationSteps: React.FC = () => {
               Connect Google Account
             </CardTitle>
             <CardDescription>
-              Connect your Google account to enable additional features and data sync.
+              Connect your Google account to complete the verification process. This step is required to access the dashboard.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -511,7 +586,7 @@ const VerificationSteps: React.FC = () => {
                   Future integration capabilities
                 </li>
               </ul>
-              <Button 
+              <Button
                 onClick={handleLinkGoogle}
                 disabled={isLoading}
                 className="w-full"
@@ -534,7 +609,7 @@ const VerificationSteps: React.FC = () => {
       )}
 
       {/* LinkedIn Connection Step */}
-      {currentStep === 'linkedin' && (
+      {currentStep === "linkedin" && (
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center">
@@ -542,7 +617,7 @@ const VerificationSteps: React.FC = () => {
               Connect LinkedIn Account
             </CardTitle>
             <CardDescription>
-              Connect your LinkedIn account to enhance your professional networking capabilities.
+              Connect your LinkedIn account to complete the verification process. This step is required to access the dashboard.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -561,7 +636,7 @@ const VerificationSteps: React.FC = () => {
                   Business networking tools
                 </li>
               </ul>
-              <Button 
+              <Button
                 onClick={handleLinkLinkedin}
                 disabled={isLoading}
                 className="w-full"
@@ -582,7 +657,7 @@ const VerificationSteps: React.FC = () => {
           </CardContent>
         </Card>
       )}
-      
+
       {/* Recaptcha container for phone verification */}
       <div id="recaptcha-container"></div>
     </div>

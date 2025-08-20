@@ -10,8 +10,23 @@ import { useAuth } from '@/contexts/auth-context';
 import VerificationSteps from '@/components/auth/VerificationSteps';
 
 const NewDashboardPage: React.FC = () => {
-  const { user, isLoading, isSignedIn, signOut, getAuthSteps } = useAuth();
+  const { user, isLoading, isSignedIn, signOut, getAuthSteps, refreshUserData } = useAuth();
   const router = useRouter();
+
+  // Refresh user data on component mount to ensure verification status is current
+  useEffect(() => {
+    const refreshData = async () => {
+      if (isSignedIn && user) {
+        try {
+          await refreshUserData();
+        } catch (error) {
+          console.error('Failed to refresh user data:', error);
+        }
+      }
+    };
+
+    refreshData();
+  }, [isSignedIn, user, refreshUserData]);
 
   useEffect(() => {
     // Only redirect if auth is definitely not loading and user is not signed in
@@ -56,7 +71,7 @@ const NewDashboardPage: React.FC = () => {
   }
 
   const authSteps = getAuthSteps();
-  const allStepsCompleted = authSteps.every(step => step.completed || step.step === 'complete');
+  const allStepsCompleted = authSteps.find(step => step.step === 'complete')?.completed || false;
 
   // If verification is not complete, show verification steps
   if (!allStepsCompleted) {
@@ -297,8 +312,24 @@ const NewDashboardPage: React.FC = () => {
                       </>
                     ) : (
                       <>
-                        <Icons.AlertCircle size={16} className="text-yellow-500 mr-1" />
-                        <span className="text-sm text-yellow-600">Optional</span>
+                        <Icons.Close size={16} className="text-red-500 mr-1" />
+                        <span className="text-sm text-red-600">Required</span>
+                      </>
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-gray-600">LinkedIn Connected</span>
+                  <div className="flex items-center">
+                    {user.connectedAccounts.linkedin?.connected ? (
+                      <>
+                        <Icons.Check size={16} className="text-green-500 mr-1" />
+                        <span className="text-sm text-green-600">Connected</span>
+                      </>
+                    ) : (
+                      <>
+                        <Icons.Close size={16} className="text-red-500 mr-1" />
+                        <span className="text-sm text-red-600">Required</span>
                       </>
                     )}
                   </div>
