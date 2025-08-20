@@ -20,6 +20,7 @@ const VerificationSteps: React.FC = () => {
   const { 
     user, 
     sendEmailVerificationLink, 
+    checkEmailVerificationStatus,
     sendPhoneVerificationCode, 
     verifyPhoneCode,
     linkGoogleAccount,
@@ -53,6 +54,14 @@ const VerificationSteps: React.FC = () => {
   const handleSendEmailVerification = async () => {
     try {
       await sendEmailVerificationLink();
+    } catch {
+      // Error handled by auth context
+    }
+  };
+
+  const handleCheckEmailStatus = async () => {
+    try {
+      await checkEmailVerificationStatus();
     } catch {
       // Error handled by auth context
     }
@@ -156,25 +165,45 @@ const VerificationSteps: React.FC = () => {
               <p className="text-sm text-gray-600">
                 Click the button below to send a verification email to your inbox.
               </p>
-              <Button 
-                onClick={handleSendEmailVerification}
-                disabled={isLoading}
-                className="w-full"
-              >
-                {isLoading ? (
-                  <>
-                    <Icons.Spinner size={16} className="mr-2" />
-                    Sending...
-                  </>
-                ) : (
-                  <>
-                    <Icons.Mail size={16} className="mr-2" />
-                    Send Verification Email
-                  </>
-                )}
-              </Button>
+              <div className="flex space-x-2">
+                <Button 
+                  onClick={handleSendEmailVerification}
+                  disabled={isLoading}
+                  variant="outline"
+                  className="flex-1"
+                >
+                  {isLoading ? (
+                    <>
+                      <Icons.Spinner size={16} className="mr-2" />
+                      Sending...
+                    </>
+                  ) : (
+                    <>
+                      <Icons.Mail size={16} className="mr-2" />
+                      Send Email
+                    </>
+                  )}
+                </Button>
+                <Button 
+                  onClick={handleCheckEmailStatus}
+                  disabled={isLoading}
+                  className="flex-1"
+                >
+                  {isLoading ? (
+                    <>
+                      <Icons.Spinner size={16} className="mr-2" />
+                      Checking...
+                    </>
+                  ) : (
+                    <>
+                      <Icons.Check size={16} className="mr-2" />
+                      Check Status
+                    </>
+                  )}
+                </Button>
+              </div>
               <p className="text-xs text-gray-500">
-                After clicking the link in your email, refresh this page.
+                After clicking the link in your email, click &quot;Check Status&quot; to verify.
               </p>
             </div>
           </CardContent>

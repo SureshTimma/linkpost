@@ -47,6 +47,7 @@ interface AuthContextType extends AuthState {
   
   // Verification
   sendEmailVerificationLink: () => Promise<void>;
+  checkEmailVerificationStatus: () => Promise<void>;
   sendPhoneVerificationCode: (phoneNumber: string) => Promise<void>;
   verifyPhoneCode: (code: string) => Promise<void>;
   
@@ -115,6 +116,12 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
               setIsSignedIn(false);
               setIsLoading(false);
               return;
+            }
+
+            // Sync email verification status from Firebase Auth to Firestore
+            if (firebaseUser.emailVerified && !existingUser.verification.emailVerified) {
+              await updateEmailVerification(firebaseUser.uid, true);
+              existingUser.verification.emailVerified = true; // Update local state
             }
 
             // Update login timestamp
@@ -265,6 +272,32 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     }
   };
 
+  const checkEmailVerificationStatus = async (): Promise<void> => {
+    try {
+      if (!auth.currentUser) {
+        throw new Error('No user signed in');
+      }
+      
+      // Reload the user to get fresh data from Firebase
+      await auth.currentUser.reload();
+      
+      if (auth.currentUser.emailVerified && user && !user.verification.emailVerified) {
+        // Update Firestore and local state
+        await updateEmailVerification(auth.currentUser.uid, true);
+        
+        // Update local user state
+        const updatedUser = { ...user };
+        updatedUser.verification.emailVerified = true;
+        setUser(updatedUser);
+        localStorage.setItem('user_data', JSON.stringify(updatedUser));
+        
+        toast.success('Email verified successfully!');
+      }
+    } catch (error: unknown) {
+      console.error('Email verification check error:', error);
+    }
+  };
+
   const sendPhoneVerificationCode = async (phoneNumber: string): Promise<void> => {
     try {
       if (!auth.currentUser) {
@@ -388,6 +421,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     signInWithEmail,
     signInWithGoogle,
     sendEmailVerificationLink,
+    checkEmailVerificationStatus,
     sendPhoneVerificationCode,
     verifyPhoneCode,
     signOut,
