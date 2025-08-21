@@ -10,13 +10,14 @@ import { Textarea } from '@/components/ui/textarea';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Icons } from '@/components/ui/icons';
 import { useAuth } from '@/contexts/auth-context';
-import { NewsItem, PostGenerationRequest } from '@/types';
+import { NewsItem } from '@/types';
 import toast from 'react-hot-toast';
 
 interface CreatePostForm {
   content: string;
   scheduledDate: string;
   scheduledTime: string;
+  publishOption: 'now' | 'schedule';
 }
 
 const CreatePostPage: React.FC = () => {
@@ -33,7 +34,8 @@ const CreatePostPage: React.FC = () => {
     defaultValues: {
       content: '',
       scheduledDate: new Date().toISOString().split('T')[0],
-      scheduledTime: '09:00'
+      scheduledTime: '09:00',
+      publishOption: 'schedule'
     }
   });
 
@@ -161,13 +163,17 @@ What strategies have worked best for you in your professional journey?
   };
 
   const handleCustomGenerate = () => {
-    const prompt = prompt('Enter a topic or prompt for content generation:');
-    if (prompt) {
-      generateContent(undefined, prompt);
+    const userPrompt = window.prompt('Enter a topic or prompt for content generation:');
+    if (userPrompt) {
+      generateContent(undefined, userPrompt);
     }
   };
 
-  const handleNextStep = () => {
+  const handleNextStep = (e?: React.MouseEvent) => {
+    console.log('handleNextStep called, current step:', step);
+    if (e) {
+      e.preventDefault(); // Prevent any form submission
+    }
     if (step === 'content') {
       setStep('schedule');
     } else if (step === 'schedule') {
@@ -176,21 +182,57 @@ What strategies have worked best for you in your professional journey?
   };
 
   const handleSubmit = async (data: CreatePostForm) => {
+    console.log('handleSubmit called with data:', data);
+    console.log('Current step:', step);
+    
+    // Only allow submission when on the review step
+    if (step !== 'review') {
+      console.log('Form submitted but not on review step, ignoring...');
+      return;
+    }
+    
     if (!user) return;
 
     try {
       // Check if user has posts remaining
-      if (user.subscription.postsRemaining <= 0) {
+      const postsRemaining = user.subscription.postsLimit - user.subscription.postsUsed;
+      if (postsRemaining <= 0) {
         toast.error('You have no posts remaining. Please upgrade to premium.');
         router.push('/pricing');
         return;
       }
 
-      // Simulate post creation
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      
-      toast.success('Post scheduled successfully!');
-      router.push('/dashboard');
+      console.log('Making API call to /api/posts/publish');
+
+      const requestBody = {
+        content: data.content,
+        publishNow: data.publishOption === 'now',
+        scheduleDate: data.publishOption === 'schedule' 
+          ? `${data.scheduledDate}T${data.scheduledTime}:00` 
+          : undefined
+      };
+
+      const response = await fetch('/api/posts/publish', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${user.id}`
+        },
+        body: JSON.stringify(requestBody)
+      });
+
+      const result = await response.json();
+
+      if (response.ok) {
+        toast.success(
+          data.publishOption === 'now' 
+            ? 'Post published to LinkedIn successfully!' 
+            : 'Post scheduled successfully!'
+        );
+        router.push('/dashboard');
+      } else {
+        throw new Error(result.error || 'Failed to publish post');
+      }
       
     } catch (error) {
       console.error('Post creation failed:', error);
@@ -228,7 +270,7 @@ What strategies have worked best for you in your professional journey?
             
             <div className="flex items-center space-x-4">
               <span className="text-sm text-gray-600">
-                {user.subscription.postsRemaining} posts remaining
+                {user.subscription.postsLimit - user.subscription.postsUsed} posts remaining
               </span>
               <Link href="/dashboard">
                 <Button variant="outline">Dashboard</Button>
@@ -272,7 +314,12 @@ What strategies have worked best for you in your professional journey?
           </div>
         </div>
 
-        <form onSubmit={form.handleSubmit(handleSubmit)}>
+        <form onSubmit={form.handleSubmit(handleSubmit)} onKeyDown={(e) => {
+          // Prevent Enter key from submitting the form unless on review step
+          if (e.key === 'Enter' && step !== 'review') {
+            e.preventDefault();
+          }
+        }}>
           {/* Content Step */}
           {step === 'content' && (
             <div className="space-y-6">
@@ -393,20 +440,50 @@ What strategies have worked best for you in your professional journey?
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <Input
-                    type="date"
-                    label="Publication Date"
-                    {...form.register('scheduledDate', { required: 'Date is required' })}
-                    error={form.formState.errors.scheduledDate?.message}
-                  />
-                  
-                  <Input
-                    type="time"
-                    label="Publication Time"
-                    {...form.register('scheduledTime', { required: 'Time is required' })}
-                    error={form.formState.errors.scheduledTime?.message}
-                  />
+                <div className="space-y-6">
+                  {/* Publish Option Selection */}
+                  <div className="space-y-4">
+                    <label className="text-sm font-medium text-gray-700">When would you like to publish?</label>
+                    <div className="flex space-x-4">
+                      <label className="flex items-center space-x-2 cursor-pointer">
+                        <input
+                          type="radio"
+                          value="now"
+                          {...form.register('publishOption')}
+                          className="text-blue-600"
+                        />
+                        <span>Publish Now</span>
+                      </label>
+                      <label className="flex items-center space-x-2 cursor-pointer">
+                        <input
+                          type="radio"
+                          value="schedule"
+                          {...form.register('publishOption')}
+                          className="text-blue-600"
+                        />
+                        <span>Schedule for Later</span>
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* Schedule Options - Only show when schedule is selected */}
+                  {form.watch('publishOption') === 'schedule' && (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <Input
+                        type="date"
+                        label="Publication Date"
+                        {...form.register('scheduledDate', { required: 'Date is required' })}
+                        error={form.formState.errors.scheduledDate?.message}
+                      />
+                      
+                      <Input
+                        type="time"
+                        label="Publication Time"
+                        {...form.register('scheduledTime', { required: 'Time is required' })}
+                        error={form.formState.errors.scheduledTime?.message}
+                      />
+                    </div>
+                  )}
                 </div>
                 
                 <div className="mt-6 p-4 bg-blue-50 rounded-lg">
@@ -443,7 +520,7 @@ What strategies have worked best for you in your professional journey?
                       </div>
                       <div>
                         <h4 className="font-medium text-gray-900">
-                          {user.displayName || 'Your Name'}
+                          {user.profile.firstName + ' ' + user.profile.lastName}
                         </h4>
                         <p className="text-sm text-gray-500">Professional Title</p>
                       </div>
@@ -463,11 +540,17 @@ What strategies have worked best for you in your professional journey?
 
                   {/* Schedule Summary */}
                   <div className="bg-gray-50 rounded-lg p-4">
-                    <h4 className="font-medium text-gray-900 mb-2">Schedule Summary</h4>
+                    <h4 className="font-medium text-gray-900 mb-2">Publishing Details</h4>
                     <div className="text-sm text-gray-600">
-                      <p>Date: {new Date(form.watch('scheduledDate')).toLocaleDateString()}</p>
-                      <p>Time: {form.watch('scheduledTime')}</p>
-                      <p>Timezone: {Intl.DateTimeFormat().resolvedOptions().timeZone}</p>
+                      {form.watch('publishOption') === 'now' ? (
+                        <p>✅ This post will be published immediately to LinkedIn</p>
+                      ) : (
+                        <>
+                          <p>📅 Date: {new Date(form.watch('scheduledDate')).toLocaleDateString()}</p>
+                          <p>🕐 Time: {form.watch('scheduledTime')}</p>
+                          <p>🌍 Timezone: {Intl.DateTimeFormat().resolvedOptions().timeZone}</p>
+                        </>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -496,7 +579,7 @@ What strategies have worked best for you in your professional journey?
               {step === 'review' ? (
                 <Button type="submit" loading={isLoading}>
                   <Icons.Send size={16} className="mr-2" />
-                  Schedule Post
+                  {form.watch('publishOption') === 'now' ? 'Publish Now' : 'Schedule Post'}
                 </Button>
               ) : (
                 <Button 
