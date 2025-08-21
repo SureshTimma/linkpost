@@ -73,10 +73,20 @@ export async function fetchLinkedInProfile(accessToken: string) {
   
   const profile = await profileRes.json();
   
+  // The 'sub' field in OpenID Connect contains the LinkedIn user ID
+  // It's in the format "xxxxxxxx" which we can use directly
+  const profileId = profile.sub || '';
+  
   // With OpenID Connect, email is included in the profile response if email scope is granted
   const email = profile.email || null;
   
-  return { profile, email };
+  return { 
+    profile: {
+      ...profile,
+      id: profileId // Add the LinkedIn ID to the profile
+    }, 
+    email 
+  };
 }
 
 export function validateState(state: string) {

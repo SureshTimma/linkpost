@@ -33,14 +33,12 @@ const CreatePostPage: React.FC = () => {
 
   // Get LinkedIn profile from user context (memoized to prevent re-renders)
   const linkedinProfile = useMemo(() => {
-    return user?.connectedAccounts?.linkedin ? {
-      name: user.connectedAccounts.linkedin.name || 
-            (user.connectedAccounts.linkedin.givenName && user.connectedAccounts.linkedin.familyName 
-              ? `${user.connectedAccounts.linkedin.givenName} ${user.connectedAccounts.linkedin.familyName}`
-              : `${user.profile?.firstName || ''} ${user.profile?.lastName || ''}`.trim()),
-      picture: user.connectedAccounts.linkedin.picture || user.profile?.profilePicture || '',
-      headline: user.connectedAccounts.linkedin.headline || 'Professional',
-      email: user.connectedAccounts.linkedin.email || user.email
+    return user?.connectedAccounts?.linkedin?.connected ? {
+      name: user.connectedAccounts.linkedin.profile?.name || 
+            `${user.profile?.firstName || ''} ${user.profile?.lastName || ''}`.trim(),
+      picture: user.connectedAccounts.linkedin.profile?.picture || user.profile?.profilePicture || '',
+      headline: user.connectedAccounts.linkedin.profile?.headline || 'Professional',
+      email: user.connectedAccounts.linkedin.profile?.email || user.email
     } : {
       name: user?.profile?.firstName && user?.profile?.lastName 
         ? `${user.profile.firstName} ${user.profile.lastName}` 

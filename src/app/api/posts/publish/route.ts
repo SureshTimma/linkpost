@@ -37,6 +37,14 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'LinkedIn not connected' }, { status: 400 });
     }
 
+    // Debug: Log LinkedIn data
+    console.log('LinkedIn data:', {
+      accessToken: userData.connectedAccounts.linkedin.accessToken ? 'present' : 'missing',
+      profileId: userData.connectedAccounts.linkedin.profileId,
+      profile: userData.connectedAccounts.linkedin.profile,
+      connected: userData.connectedAccounts.linkedin.connected
+    });
+
     // Check posts remaining
     const postsUsed = userData.subscription?.postsUsed || 0;
     const postsLimit = userData.subscription?.postsLimit || 5;
@@ -45,6 +53,46 @@ export async function POST(request: NextRequest) {
     }
 
     if (publishNow) {
+      // Check if we have a profileId
+      let profileId = userData.connectedAccounts.linkedin.profileId;
+      
+      // If profileId is missing, try to get it from LinkedIn API
+      if (!profileId) {
+        console.log('ProfileId missing, attempting to fetch from LinkedIn API...');
+        try {
+          const profileResponse = await fetch('https://api.linkedin.com/v2/userinfo', {
+            headers: {
+              'Authorization': `Bearer ${userData.connectedAccounts.linkedin.accessToken}`,
+            },
+          });
+          
+          if (profileResponse.ok) {
+            const profileData = await profileResponse.json();
+            profileId = profileData.sub; // OpenID Connect 'sub' field contains LinkedIn ID
+            console.log('Retrieved profileId from API:', profileId);
+            
+            // Update the user's profileId in the database for future use
+            if (profileId) {
+              await adminDb.collection('users').doc(userId).update({
+                'connectedAccounts.linkedin.profileId': profileId
+              });
+            }
+          } else {
+            console.error('Failed to fetch profile from LinkedIn API:', profileResponse.status);
+          }
+        } catch (error) {
+          console.error('Error fetching LinkedIn profile:', error);
+        }
+      }
+      
+      if (!profileId) {
+        console.error('LinkedIn profileId still missing after API call.');
+        return NextResponse.json({ 
+          error: 'Unable to get LinkedIn profile ID. Please reconnect your LinkedIn account.',
+          reconnectRequired: true 
+        }, { status: 400 });
+      }
+
       // Publish immediately to LinkedIn
       const linkedinResponse = await fetch('https://api.linkedin.com/v2/ugcPosts', {
         method: 'POST',
@@ -53,7 +101,7 @@ export async function POST(request: NextRequest) {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          author: `urn:li:person:${userData.connectedAccounts.linkedin.profileId}`,
+          author: `urn:li:person:${profileId}`,
           lifecycleState: 'PUBLISHED',
           specificContent: {
             'com.linkedin.ugc.ShareContent': {
