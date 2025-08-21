@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
@@ -9,9 +9,75 @@ import { Icons } from '@/components/ui/icons';
 import { useAuth } from '@/contexts/auth-context';
 import VerificationSteps from '@/components/auth/VerificationSteps';
 
+interface Post {
+  id: string;
+  content: string;
+  platform: string;
+  status: string;
+  type: string;
+  createdAt: string;
+  publishedAt?: string;
+  scheduleDate?: string;
+}
+
+interface PostsData {
+  publishedPosts: Post[];
+  scheduledPosts: Post[];
+  stats: {
+    totalPublished: number;
+    totalScheduled: number;
+  };
+}
+
 const NewDashboardPage: React.FC = () => {
   const { user, isLoading, isSignedIn, signOut, getAuthSteps, refreshUserData } = useAuth();
   const router = useRouter();
+  const [postsData, setPostsData] = useState<PostsData | null>(null);
+  const [postsLoading, setPostsLoading] = useState(false);
+
+  // Fetch user posts
+  const fetchPosts = useCallback(async () => {
+    if (!user || !isSignedIn) return;
+    
+    setPostsLoading(true);
+    try {
+      const response = await fetch('/api/posts', {
+        headers: {
+          'Authorization': `Bearer ${user.id}`
+        }
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        setPostsData(data);
+      } else {
+        console.error('Failed to fetch posts');
+      }
+    } catch (error) {
+      console.error('Error fetching posts:', error);
+    } finally {
+      setPostsLoading(false);
+    }
+  }, [user, isSignedIn]);
+
+  // Fetch posts when user is available
+  useEffect(() => {
+    if (user && isSignedIn) {
+      fetchPosts();
+    }
+  }, [user, isSignedIn, fetchPosts]);
+
+  // Refresh posts when returning to dashboard (useful after creating a post)
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && user && isSignedIn) {
+        fetchPosts();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [user, isSignedIn, fetchPosts]);
 
   // Smart refresh user data - only refresh when actually needed
   useEffect(() => {
@@ -167,14 +233,14 @@ const NewDashboardPage: React.FC = () => {
     },
     {
       title: 'Scheduled Posts',
-      value: user.posts?.scheduled?.toString?.() || '0',
+      value: postsLoading ? '...' : (postsData?.stats.totalScheduled?.toString() || '0'),
       subtitle: 'upcoming',
       icon: Icons.Calendar,
       color: 'text-green-600'
     },
     {
       title: 'Total Posts',
-      value: user.posts?.total?.toString?.() || '0',
+      value: postsLoading ? '...' : (postsData?.stats.totalPublished?.toString() || '0'),
       subtitle: 'published',
       icon: Icons.BarChart,
       color: 'text-purple-600'
@@ -370,13 +436,72 @@ const NewDashboardPage: React.FC = () => {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="text-center py-8">
-              <Icons.Newspaper size={48} className="mx-auto text-gray-300 mb-4" />
-              <p className="text-gray-500">No recent activity to show</p>
-              <p className="text-sm text-gray-400 mt-1">
-                Your posts and scheduling activity will appear here
-              </p>
-            </div>
+            {postsLoading ? (
+              <div className="text-center py-8">
+                <Icons.Spinner className="animate-spin mx-auto text-gray-400 mb-4" size={32} />
+                <p className="text-gray-500">Loading posts...</p>
+              </div>
+            ) : postsData && (postsData.publishedPosts.length > 0 || postsData.scheduledPosts.length > 0) ? (
+              <div className="space-y-4">
+                {/* Published Posts */}
+                {postsData.publishedPosts.length > 0 && (
+                  <div>
+                    <h4 className="text-sm font-medium text-gray-700 mb-3">Recently Published</h4>
+                    <div className="space-y-3">
+                      {postsData.publishedPosts.slice(0, 3).map((post) => (
+                        <div key={post.id} className="flex items-start space-x-3 p-3 bg-gray-50 rounded-lg">
+                          <div className="w-8 h-8 bg-green-100 rounded-full flex items-center justify-center flex-shrink-0">
+                            <Icons.Check size={16} className="text-green-600" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm text-gray-900 truncate">
+                              {post.content.substring(0, 100)}...
+                            </p>
+                            <div className="flex items-center mt-1 text-xs text-gray-500">
+                              <Icons.LinkedIn size={12} className="mr-1" />
+                              <span>Published on {new Date(post.publishedAt!).toLocaleDateString()}</span>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Scheduled Posts */}
+                {postsData.scheduledPosts.length > 0 && (
+                  <div>
+                    <h4 className="text-sm font-medium text-gray-700 mb-3">Upcoming Posts</h4>
+                    <div className="space-y-3">
+                      {postsData.scheduledPosts.slice(0, 3).map((post) => (
+                        <div key={post.id} className="flex items-start space-x-3 p-3 bg-blue-50 rounded-lg">
+                          <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center flex-shrink-0">
+                            <Icons.Calendar size={16} className="text-blue-600" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm text-gray-900 truncate">
+                              {post.content.substring(0, 100)}...
+                            </p>
+                            <div className="flex items-center mt-1 text-xs text-gray-500">
+                              <Icons.Clock size={12} className="mr-1" />
+                              <span>Scheduled for {new Date(post.scheduleDate!).toLocaleDateString()} at {new Date(post.scheduleDate!).toLocaleTimeString()}</span>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="text-center py-8">
+                <Icons.Newspaper size={48} className="mx-auto text-gray-300 mb-4" />
+                <p className="text-gray-500">No recent activity to show</p>
+                <p className="text-sm text-gray-400 mt-1">
+                  Your posts and scheduling activity will appear here
+                </p>
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>

@@ -83,18 +83,45 @@ export async function POST(request: NextRequest) {
         'subscription.postsUsed': (userData.subscription?.postsUsed || 0) + 1
       });
 
+      // Save post data to database
+      const postData = {
+        userId,
+        content,
+        publishedAt: new Date(),
+        platform: 'linkedin',
+        status: 'published',
+        type: 'immediate',
+        createdAt: new Date(),
+        linkedinPostId: linkedinResponse.headers.get('x-restli-id') || 'unknown' // LinkedIn returns post ID in headers
+      };
+
+      await adminDb.collection('posts').add(postData);
+
       return NextResponse.json({ 
         success: true, 
-        message: 'Post published to LinkedIn successfully' 
+        message: 'Post published to LinkedIn successfully',
+        postId: postData.linkedinPostId
       });
 
     } else if (scheduleDate) {
       // Schedule the post for later
-      // Here you would typically save to a scheduled posts collection
-      // For now, we'll just return success
+      const scheduledPostData = {
+        userId,
+        content,
+        scheduleDate: new Date(scheduleDate),
+        platform: 'linkedin',
+        status: 'scheduled',
+        type: 'scheduled',
+        createdAt: new Date()
+      };
+
+      // Save scheduled post to database
+      const docRef = await adminDb.collection('scheduledPosts').add(scheduledPostData);
+
       return NextResponse.json({ 
         success: true, 
-        message: 'Post scheduled successfully' 
+        message: 'Post scheduled successfully',
+        scheduledPostId: docRef.id
       });
     }
 
