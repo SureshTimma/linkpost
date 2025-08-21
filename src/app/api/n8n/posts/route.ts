@@ -11,21 +11,26 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const now = new Date();
-    
-    // Get scheduled posts that are ready to be published
+    // Get scheduled posts (simplified query to avoid composite index)
     const readyPostsSnapshot = await adminDb
       .collection('posts')
       .where('status', '==', 'scheduled')
-      .where('scheduleDate', '<=', now)
       .where('n8nProcessed', '==', false)
-      .limit(50) // Process in batches
+      .limit(100) // Get more to filter in memory
       .get();
 
     const readyPosts = [];
 
     for (const doc of readyPostsSnapshot.docs) {
       const postData = doc.data();
+      
+      // Check if the post is actually ready to be published (filter in memory)
+      const scheduleDate = postData.scheduleDate?.toDate();
+      const now = new Date();
+      
+      if (!scheduleDate || scheduleDate > now) {
+        continue; // Skip posts not yet ready
+      }
       
       // Fetch fresh user credentials for each post
       const userDoc = await adminDb.collection('users').doc(postData.userId).get();
