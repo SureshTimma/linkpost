@@ -14,6 +14,7 @@ export async function GET(request: NextRequest) {
     const publishedPostsSnapshot = await adminDb
       .collection('posts')
       .where('userId', '==', userId)
+      .where('status', '==', 'published')
       .orderBy('createdAt', 'desc')
       .limit(10)
       .get();
@@ -22,12 +23,13 @@ export async function GET(request: NextRequest) {
       id: doc.id,
       ...doc.data(),
       createdAt: doc.data().createdAt.toDate().toISOString(),
-      publishedAt: doc.data().publishedAt?.toDate().toISOString()
+      publishedAt: doc.data().publishedAt?.toDate().toISOString(),
+      scheduleDate: doc.data().scheduleDate?.toDate().toISOString()
     }));
 
     // Fetch scheduled posts
     const scheduledPostsSnapshot = await adminDb
-      .collection('scheduledPosts')
+      .collection('posts')
       .where('userId', '==', userId)
       .where('status', '==', 'scheduled')
       .orderBy('scheduleDate', 'asc')
@@ -38,18 +40,20 @@ export async function GET(request: NextRequest) {
       id: doc.id,
       ...doc.data(),
       createdAt: doc.data().createdAt.toDate().toISOString(),
-      scheduleDate: doc.data().scheduleDate.toDate().toISOString()
+      publishedAt: doc.data().publishedAt?.toDate().toISOString(),
+      scheduleDate: doc.data().scheduleDate?.toDate().toISOString()
     }));
 
     // Get total counts
     const totalPublishedSnapshot = await adminDb
       .collection('posts')
       .where('userId', '==', userId)
+      .where('status', '==', 'published')
       .count()
       .get();
 
     const totalScheduledSnapshot = await adminDb
-      .collection('scheduledPosts')
+      .collection('posts')
       .where('userId', '==', userId)
       .where('status', '==', 'scheduled')
       .count()

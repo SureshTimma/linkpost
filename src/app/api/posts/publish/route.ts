@@ -104,7 +104,7 @@ export async function POST(request: NextRequest) {
       });
 
     } else if (scheduleDate) {
-      // Schedule the post for later
+      // Schedule the post for later - save to posts collection for n8n processing
       const scheduledPostData = {
         userId,
         content,
@@ -112,11 +112,13 @@ export async function POST(request: NextRequest) {
         platform: 'linkedin',
         status: 'scheduled',
         type: 'scheduled',
-        createdAt: new Date()
+        createdAt: new Date(),
+        // Add metadata for n8n workflow
+        n8nProcessed: false
       };
 
-      // Save scheduled post to database
-      const docRef = await adminDb.collection('scheduledPosts').add(scheduledPostData);
+      // Save scheduled post to main posts collection
+      const docRef = await adminDb.collection('posts').add(scheduledPostData);
 
       return NextResponse.json({ 
         success: true, 
