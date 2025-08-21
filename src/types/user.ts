@@ -32,6 +32,12 @@ export interface User {
       refreshToken?: string;
       profileId?: string;
       connectedAt?: Date;
+      profile?: {
+        name?: string;
+        picture?: string;
+        headline?: string;
+        email?: string;
+      };
     };
     google?: {
       connected: boolean;

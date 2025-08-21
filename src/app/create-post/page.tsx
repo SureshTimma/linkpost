@@ -1,9 +1,10 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import Link from 'next/link';
+import Image from 'next/image';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -30,6 +31,26 @@ const CreatePostPage: React.FC = () => {
   const [trendingNews, setTrendingNews] = useState<NewsItem[]>([]);
   const [generatedContent, setGeneratedContent] = useState('');
 
+  // Get LinkedIn profile from user context (memoized to prevent re-renders)
+  const linkedinProfile = useMemo(() => {
+    return user?.connectedAccounts?.linkedin ? {
+      name: user.connectedAccounts.linkedin.name || 
+            (user.connectedAccounts.linkedin.givenName && user.connectedAccounts.linkedin.familyName 
+              ? `${user.connectedAccounts.linkedin.givenName} ${user.connectedAccounts.linkedin.familyName}`
+              : `${user.profile?.firstName || ''} ${user.profile?.lastName || ''}`.trim()),
+      picture: user.connectedAccounts.linkedin.picture || user.profile?.profilePicture || '',
+      headline: user.connectedAccounts.linkedin.headline || 'Professional',
+      email: user.connectedAccounts.linkedin.email || user.email
+    } : {
+      name: user?.profile?.firstName && user?.profile?.lastName 
+        ? `${user.profile.firstName} ${user.profile.lastName}` 
+        : 'Your Name',
+      picture: user?.profile?.profilePicture || '',
+      headline: 'Professional',
+      email: user?.email || ''
+    };
+  }, [user]);
+
   const form = useForm<CreatePostForm>({
     defaultValues: {
       content: '',
@@ -38,6 +59,12 @@ const CreatePostPage: React.FC = () => {
       publishOption: 'schedule'
     }
   });
+
+  // Debug: Log LinkedIn data
+  useEffect(() => {
+    console.log('User LinkedIn data:', user?.connectedAccounts?.linkedin);
+    console.log('Computed LinkedIn profile:', linkedinProfile);
+  }, [user, linkedinProfile]);
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {
@@ -515,14 +542,29 @@ What strategies have worked best for you in your professional journey?
                   {/* Post Preview */}
                   <div className="border border-gray-200 rounded-lg p-4 bg-white">
                     <div className="flex items-start space-x-3 mb-3">
-                      <div className="w-10 h-10 bg-blue-700 rounded-full flex items-center justify-center">
-                        <Icons.User size={20} color="white" />
-                      </div>
+                      {linkedinProfile.picture ? (
+                        <Image 
+                          src={linkedinProfile.picture} 
+                          alt="LinkedIn Profile"
+                          width={40}
+                          height={40}
+                          className="rounded-full object-cover"
+                        />
+                      ) : (
+                        <div className="w-10 h-10 bg-blue-700 rounded-full flex items-center justify-center">
+                          <Icons.User size={20} color="white" />
+                        </div>
+                      )}
                       <div>
                         <h4 className="font-medium text-gray-900">
-                          {user.profile.firstName + ' ' + user.profile.lastName}
+                          {linkedinProfile.name || `${user.profile.firstName} ${user.profile.lastName}`}
                         </h4>
-                        <p className="text-sm text-gray-500">Professional Title</p>
+                        <p className="text-sm text-gray-500">
+                          {linkedinProfile.headline || 'Professional'}
+                        </p>
+                      </div>
+                      <div className="ml-auto">
+                        <Icons.LinkedIn size={16} className="text-blue-700" />
                       </div>
                     </div>
                     
