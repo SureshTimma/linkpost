@@ -664,6 +664,11 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         refreshToken: result.refreshToken || '',
         profileId: result.profile?.id || '',
         email: result.email || result.profile?.email || '',
+        name: result.profile?.name || result.profile?.given_name && result.profile?.family_name 
+          ? `${result.profile.given_name} ${result.profile.family_name}` 
+          : '',
+        profilePicture: result.profile?.picture || '',
+        headline: result.profile?.headline || '',
         scope: result.scope || '',
         expiresIn: result.expiresIn || 0
       };

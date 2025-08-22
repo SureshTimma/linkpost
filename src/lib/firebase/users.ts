@@ -273,6 +273,9 @@ export async function connectOAuthAccount(
     email?: string;
     expiresIn?: number;
     scope?: string;
+    name?: string;
+    profilePicture?: string;
+    headline?: string;
   }
 ): Promise<void> {
   try {
@@ -304,6 +307,23 @@ export async function connectOAuthAccount(
     }
     if (expiresAt !== null) {
       accountInfo.expiresAt = expiresAt;
+    }
+
+    // Add profile information if available
+    if (provider === 'linkedin' && (accountData.name || accountData.profilePicture || accountData.headline)) {
+      accountInfo.profile = {};
+      if (accountData.name !== undefined) {
+        (accountInfo.profile as Record<string, unknown>).name = accountData.name;
+      }
+      if (accountData.profilePicture !== undefined) {
+        (accountInfo.profile as Record<string, unknown>).picture = accountData.profilePicture;
+      }
+      if (accountData.headline !== undefined) {
+        (accountInfo.profile as Record<string, unknown>).headline = accountData.headline;
+      }
+      if (accountData.email !== undefined) {
+        (accountInfo.profile as Record<string, unknown>).email = accountData.email;
+      }
     }
 
     const updates: Record<string, unknown> = {
